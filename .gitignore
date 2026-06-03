@@ -1,0 +1,32 @@
+# Build artifacts
+*.o
+*.so
+*.dll
+*.dylib
+
+# Compiled executables
+*.out
+*.exe
+
+# Dependency directories
+deps/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Test output
+test/results/
+test/regress.log
+
+# Temporary files
+*.tmp
+*.temp
+*.log
