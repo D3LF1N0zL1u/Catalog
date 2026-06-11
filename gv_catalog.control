@@ -1,3 +1,0 @@
-comment = 'GV Catalog extension for openGauss'
-default_version = '1.0.0'
-relocatable = false
