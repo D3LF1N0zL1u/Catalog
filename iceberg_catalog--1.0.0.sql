@@ -1,5 +1,5 @@
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
-\echo Use "CREATE EXTENSION gv_catalog" to load this file. \quit
+\echo Use "CREATE EXTENSION iceberg_catalog" to load this file. \quit
 
 CREATE SCHEMA iceberg_catalog;
 
@@ -127,7 +127,7 @@ FROM iceberg_catalog.namespaces n
 , jsonb_each_text(n.properties) AS p(key, value);
 
 COMMENT ON SCHEMA iceberg_catalog IS
-'Iceberg catalog metadata managed by the gv_catalog extension.';
+'Iceberg catalog metadata managed by the iceberg_catalog extension.';
 
 COMMENT ON TABLE iceberg_catalog.namespaces IS
 'Namespace directory records and namespace-level properties.';
@@ -152,3 +152,22 @@ COMMENT ON VIEW iceberg_catalog.iceberg_tables IS
 
 COMMENT ON VIEW iceberg_catalog.iceberg_namespace_properties IS
 'JDBC Catalog compatible namespace property rows expanded from namespaces.properties.';
+
+
+-- ============================================================================
+-- SQL Functions
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION iceberg_catalog.create_table(
+    p_namespace    TEXT,
+    p_table_name   TEXT,
+    p_schema       JSONB,
+    p_location     TEXT    DEFAULT NULL,
+    p_partition_spec JSONB DEFAULT NULL,
+    p_write_order  JSONB   DEFAULT NULL,
+    p_stage_create BOOLEAN DEFAULT FALSE,
+    p_properties   JSONB   DEFAULT NULL
+) RETURNS JSONB
+LANGUAGE C VOLATILE
+AS 'iceberg_catalog', 'iceberg_create_table';
+
