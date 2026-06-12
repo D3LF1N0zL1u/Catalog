@@ -173,3 +173,146 @@ iceberg_create_table(PG_FUNCTION_ARGS)
     PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
         CStringGetDatum("{\"metadata-location\": \"TODO\", \"metadata\": {}, \"config\": {}}")));
 }
+
+
+/* ---- is_table_existed ---- */
+
+PG_FUNCTION_INFO_V1(iceberg_is_table_existed);
+
+Datum
+iceberg_is_table_existed(PG_FUNCTION_ARGS)
+{
+    /*-------------------------------------------------------------------------
+     * Parameters:
+     *   1. p_namespace    TEXT     (required)
+     *   2. p_table        TEXT     (required)
+     *
+     * Returns: JSONB ({"exists": true} or {"exists": false})
+     *-------------------------------------------------------------------------
+     */
+
+    /* 1. Extract parameters */
+
+    if (PG_NARGS() < 2)
+        elog(ERROR, "iceberg_is_table_existed: expected 2 arguments, got %d", PG_NARGS());
+
+    char *p_namespace = NULL;
+    if (!PG_ARGISNULL(0))
+        p_namespace = text_to_cstring(PG_GETARG_TEXT_P(0));
+
+    char *p_table = NULL;
+    if (!PG_ARGISNULL(1))
+        p_table = text_to_cstring(PG_GETARG_TEXT_P(1));
+
+    /* 2. Validate required parameters */
+
+    if (p_namespace == NULL || strlen(p_namespace) == 0)
+        ereport(ERROR,
+                (errcode(ERRCODE_ICEBERG_INVALID_PARAM),
+                 errmsg("p_namespace is required and must not be empty")));
+
+    if (p_table == NULL || strlen(p_table) == 0)
+        ereport(ERROR,
+                (errcode(ERRCODE_ICEBERG_INVALID_PARAM),
+                 errmsg("p_table is required and must not be empty")));
+
+    /* 3. TODO: Check table existence via META */
+
+    /* TODO:
+     * bool exists = iceberg_meta_table_exists(p_namespace, p_table);
+     * if (exists)
+     *     PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
+     *         CStringGetDatum("{\"exists\": true}")));
+     * else
+     *     PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
+     *         CStringGetDatum("{\"exists\": false}")));
+     */
+
+    /* 4. Return stub (TODO: replace with real META call) */
+
+    PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
+        CStringGetDatum("{\"exists\": true}")));
+}
+
+
+/* ---- load_table ---- */
+
+PG_FUNCTION_INFO_V1(iceberg_load_table);
+
+Datum
+iceberg_load_table(PG_FUNCTION_ARGS)
+{
+    /*-------------------------------------------------------------------------
+     * Parameters:
+     *   1. p_namespace    TEXT     (required)
+     *   2. p_table        TEXT     (required)
+     *
+     * Returns: JSONB (LoadTableResult)
+     *-------------------------------------------------------------------------
+     */
+
+    /* 1. Extract parameters */
+
+    if (PG_NARGS() < 2)
+        elog(ERROR, "iceberg_load_table: expected 2 arguments, got %d", PG_NARGS());
+
+    char *p_namespace = NULL;
+    if (!PG_ARGISNULL(0))
+        p_namespace = text_to_cstring(PG_GETARG_TEXT_P(0));
+
+    char *p_table = NULL;
+    if (!PG_ARGISNULL(1))
+        p_table = text_to_cstring(PG_GETARG_TEXT_P(1));
+
+    /* 2. Validate required parameters */
+
+    if (p_namespace == NULL || strlen(p_namespace) == 0)
+        ereport(ERROR,
+                (errcode(ERRCODE_ICEBERG_INVALID_PARAM),
+                 errmsg("p_namespace is required and must not be empty")));
+
+    if (p_table == NULL || strlen(p_table) == 0)
+        ereport(ERROR,
+                (errcode(ERRCODE_ICEBERG_INVALID_PARAM),
+                 errmsg("p_table is required and must not be empty")));
+
+    /* 3. TODO: Get table metadata via META */
+
+    /* TODO:
+     * MetaTableInfo *info = iceberg_meta_get_table(p_namespace, p_table);
+     * if (info == NULL)
+     *     ereport(ERROR,
+     *             (errcode(ERRCODE_ICEBERG_NOT_FOUND),
+     *              errmsg("The given table does not exist")));
+     */
+
+    /* 4. TODO: Load table via SDK */
+
+    /* TODO:
+     * char *error_msg = NULL;
+     * IcebergTable *table = catalog->LoadTable(p_namespace, p_table,
+     *     info->metadata_location, &error_msg);
+     * if (error_msg != NULL)
+     *     ereport(ERROR,
+     *             (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+     *              errmsg("%s", error_msg)));
+     */
+
+    /* 5. TODO: Construct and return LoadTableResult JSONB */
+
+    /* TODO:
+     * const char *metadata_json = table->GetMetadataJson();
+     * StringInfo buf = makeStringInfo();
+     * appendStringInfo(buf,
+     *     "{\"metadata-location\":\"%s\",\"metadata\":%s,\"config\":{}}",
+     *     info->metadata_location, metadata_json);
+     * delete table;
+     * PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
+     *     CStringGetDatum(buf->data)));
+     */
+
+    /* 6. Return stub (TODO: replace with real data from SDK/META) */
+
+    PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
+        CStringGetDatum("{\"metadata-location\": \"TODO\", \"metadata\": {}, \"config\": {}}")));
+}
