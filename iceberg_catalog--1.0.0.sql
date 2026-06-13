@@ -171,3 +171,16 @@ CREATE OR REPLACE FUNCTION iceberg_catalog.create_table(
 LANGUAGE C VOLATILE
 AS 'iceberg_catalog', 'iceberg_create_table';
 
+CREATE OR REPLACE FUNCTION iceberg_catalog.is_table_existed(
+    p_namespace TEXT,
+    p_table     TEXT
+) RETURNS JSONB
+LANGUAGE C STABLE
+AS 'iceberg_catalog', 'iceberg_is_table_existed';
+
+CREATE OR REPLACE FUNCTION iceberg_catalog.load_table(
+    p_namespace TEXT,
+    p_table     TEXT
+) RETURNS JSONB
+LANGUAGE C STABLE
+AS 'iceberg_catalog', 'iceberg_load_table';
