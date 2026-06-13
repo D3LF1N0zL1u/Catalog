@@ -119,4 +119,17 @@ FROM iceberg_catalog.namespaces
 WHERE catalog_name = current_database()::text
   AND namespace = 'accounting';
 
+-- 18. 验证 create_namespace 创建了对应的 openGauss schema
+SELECT count(*) = 1 AS schema_created
+FROM pg_namespace
+WHERE nspname = 'ns-with-dash';
+
+SELECT count(*) = 1 AS schema_created
+FROM pg_namespace
+WHERE nspname = 'ns_with_underscore';
+
+SELECT count(*) = 1 AS schema_created
+FROM pg_namespace
+WHERE nspname = 'NS123MixedCase';
+
 ROLLBACK;

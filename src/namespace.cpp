@@ -8,6 +8,7 @@
 
 #include "postgres.h"
 #include "fmgr.h"
+#include "executor/spi.h"
 #include "utils/builtins.h"
 #include "utils/jsonb.h"
 #include "lib/stringinfo.h"
@@ -18,6 +19,72 @@
 #include "iceberg_catalog.h"
 #include "metadata.h"
 #include "namespace.h"
+
+
+/* ------------------------------------------------------------------ */
+/*  DDL helpers (schema create / drop for FDW foreign tables)          */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Create the openGauss schema that will host FDW foreign tables for
+ * the given Iceberg namespace.
+ *
+ * Runs in its own SPI context; the surrounding transaction ensures
+ * the schema is rolled back if the META INSERT fails later.
+ */
+static void
+ddl_create_schema(const char *namespace_name)
+{
+    StringInfoData sql;
+    int rc;
+
+    initStringInfo(&sql);
+    appendStringInfo(&sql, "CREATE SCHEMA %s",
+                     quote_identifier(namespace_name));
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR,
+                (errcode(ERRCODE_INTERNAL_ERROR),
+                 errmsg("failed to connect to SPI for schema creation")));
+
+    rc = SPI_execute(sql.data, false, 0);
+    if (rc != SPI_OK_UTILITY)
+        ereport(ERROR,
+                (errcode(ERRCODE_INTERNAL_ERROR),
+                 errmsg("failed to create schema \"%s\"", namespace_name)));
+
+    SPI_finish();
+    pfree(sql.data);
+}
+
+/*
+ * Drop the openGauss schema that hosted FDW foreign tables for the
+ * given Iceberg namespace.
+ */
+static void
+ddl_drop_schema(const char *namespace_name)
+{
+    StringInfoData sql;
+    int rc;
+
+    initStringInfo(&sql);
+    appendStringInfo(&sql, "DROP SCHEMA %s CASCADE",
+                     quote_identifier(namespace_name));
+
+    if (SPI_connect() != SPI_OK_CONNECT)
+        ereport(ERROR,
+                (errcode(ERRCODE_INTERNAL_ERROR),
+                 errmsg("failed to connect to SPI for schema drop")));
+
+    rc = SPI_execute(sql.data, false, 0);
+    if (rc != SPI_OK_UTILITY)
+        ereport(ERROR,
+                (errcode(ERRCODE_INTERNAL_ERROR),
+                 errmsg("failed to drop schema \"%s\"", namespace_name)));
+
+    SPI_finish();
+    pfree(sql.data);
+}
 
 
 /* ---- create_namespace ---- */
@@ -79,7 +146,19 @@ iceberg_create_namespace(PG_FUNCTION_ARGS)
     else
         props_str = pstrdup("{}");
 
-    /* 5. META InsertNamespace */
+    /* 5. Create FDW schema for this namespace */
+    PG_TRY();
+    {
+        ddl_create_schema(p_namespace);
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        iceberg_err_rethrow_metadata(edata, "create namespace schema");
+    }
+    PG_END_TRY();
+
+    /* 6. META InsertNamespace */
     PG_TRY();
     {
         iceberg_meta_create_namespace(p_namespace, props_str);
@@ -91,7 +170,7 @@ iceberg_create_namespace(PG_FUNCTION_ARGS)
     }
     PG_END_TRY();
 
-    /* 6. Construct and return response */
+    /* 7. Construct and return response */
     StringInfoData buf;
 
     initStringInfo(&buf);
@@ -151,6 +230,92 @@ iceberg_is_namespace_existed(PG_FUNCTION_ARGS)
     /* 4. Return result */
     PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
         CStringGetDatum(exists ? "{\"exists\": true}" : "{\"exists\": false}")));
+}
+
+
+/* ---- drop_namespace ---- */
+PG_FUNCTION_INFO_V1(iceberg_drop_namespace);
+
+Datum
+iceberg_drop_namespace(PG_FUNCTION_ARGS)
+{
+    /*-------------------------------------------------------------------------
+     * Parameters:
+     *   1. p_namespace  TEXT  (required)
+     *
+     * Returns: JSONB
+     *   {"success": true}
+     *
+     * Errors:
+     *   P0001 — p_namespace is NULL or empty
+     *   P0004 — namespace does not exist
+     *   P0005 — namespace still contains tables (foreign key constraint)
+     *-------------------------------------------------------------------------
+     */
+
+    /* 1. Extract parameters from PG_FUNCTION_ARGS */
+    if (PG_NARGS() < 1)
+        elog(ERROR, "iceberg_drop_namespace: expected 1 argument, got %d", PG_NARGS());
+
+    /* p_namespace (required) */
+    char *p_namespace = NULL;
+    if (!PG_ARGISNULL(0))
+        p_namespace = text_to_cstring(PG_GETARG_TEXT_P(0));
+
+    /* 2. Validate p_namespace */
+    if (p_namespace == NULL || strlen(p_namespace) == 0)
+        ereport(ERROR,
+                (errcode(ERRCODE_ICEBERG_INVALID_PARAM),
+                 errmsg("namespace must not be empty")));
+
+    /* 3. Check namespace exists */
+    bool ns_exists = false;
+
+    PG_TRY();
+    {
+        ns_exists = iceberg_meta_namespace_exists(p_namespace);
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        iceberg_err_rethrow_metadata(edata, "drop namespace existence check");
+    }
+    PG_END_TRY();
+
+    if (!ns_exists)
+        ereport(ERROR,
+                (errcode(ERRCODE_ICEBERG_NOT_FOUND),
+                 errmsg("The given namespace does not exist")));
+
+    /* 4. TODO: META Check namespace has no tables
+     *
+     * if (iceberg_meta_namespace_has_tables(p_namespace))
+     *     ereport(ERROR,
+     *             (errcode(ERRCODE_ICEBERG_CONFLICT),
+     *              errmsg("Cannot drop namespace: tables still exist")));
+     */
+
+    /* 5. TODO: META DeleteNamespace
+     *
+     * iceberg_meta_delete_namespace(p_namespace);
+     */
+
+    /* 6. Drop FDW schema for this namespace */
+    PG_TRY();
+    {
+        ddl_drop_schema(p_namespace);
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        iceberg_err_rethrow_metadata(edata, "drop namespace schema");
+    }
+    PG_END_TRY();
+
+    /* 7. Stub: return success.
+     * TODO: Replace with META steps above once META module is available. */
+    PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
+        CStringGetDatum("{\"success\": true}")));
 }
 
 

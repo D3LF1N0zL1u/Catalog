@@ -169,6 +169,12 @@ CREATE OR REPLACE FUNCTION iceberg_catalog.is_namespace_existed(
 LANGUAGE C STABLE
 AS 'iceberg_catalog', 'iceberg_is_namespace_existed';
 
+CREATE OR REPLACE FUNCTION iceberg_catalog.drop_namespace(
+    p_namespace TEXT
+) RETURNS JSONB
+LANGUAGE C VOLATILE
+AS 'iceberg_catalog', 'iceberg_drop_namespace';
+
 CREATE OR REPLACE FUNCTION iceberg_catalog.load_namespace(
     p_namespace TEXT
 ) RETURNS JSONB
