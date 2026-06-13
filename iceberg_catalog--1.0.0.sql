@@ -163,6 +163,14 @@ CREATE OR REPLACE FUNCTION iceberg_catalog.create_namespace(
 LANGUAGE C VOLATILE
 AS 'iceberg_catalog', 'iceberg_create_namespace';
 
+CREATE OR REPLACE FUNCTION iceberg_catalog.update_namespace_properties(
+    p_namespace TEXT,
+    p_removals  JSONB DEFAULT NULL,
+    p_updates   JSONB DEFAULT NULL
+) RETURNS JSONB
+LANGUAGE C VOLATILE
+AS 'iceberg_catalog', 'iceberg_update_namespace_properties';
+
 CREATE OR REPLACE FUNCTION iceberg_catalog.is_namespace_existed(
     p_namespace TEXT
 ) RETURNS JSONB
