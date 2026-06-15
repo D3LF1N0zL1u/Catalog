@@ -66,6 +66,12 @@ bool iceberg_meta_namespace_exists(const char *namespace_name);
 bool iceberg_meta_table_exists(const char *namespace_name, const char *table_name);
 
 /*
+ * Read table metadata from the local internal catalog.
+ * Returns NULL when the table does not exist.
+ */
+MetaTableInfo *iceberg_meta_get_table(const char *namespace_name, const char *table_name);
+
+/*
  * Register a new Iceberg table in the local metadata tables.
  *
  * Within a single SPI transaction this function:

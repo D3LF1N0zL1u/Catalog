@@ -16,6 +16,7 @@
 #include "catalog/pg_type.h"
 #include "executor/spi.h"
 #include "utils/builtins.h"
+#include "utils/memutils.h"
 
 #include <string.h>
 
@@ -147,6 +148,47 @@ execute_exists_query(const char *sql, Datum *values, Oid *argtypes)
     return SPI_processed > 0;
 }
 
+static MetaTableInfo *
+copy_table_info_from_tuple(HeapTuple tuple, TupleDesc tupdesc, MemoryContext target_context)
+{
+    MetaTableInfo *info;
+    MemoryContext old_context;
+    bool isnull;
+    Datum value;
+
+    old_context = MemoryContextSwitchTo(target_context);
+
+    info = (MetaTableInfo *) palloc0(sizeof(MetaTableInfo));
+
+    value = SPI_getbinval(tuple, tupdesc, 1, &isnull);
+    info->relid = isnull ? InvalidOid : DatumGetObjectId(value);
+    info->namespace_name = SPI_getvalue(tuple, tupdesc, 2);
+    info->table_name = SPI_getvalue(tuple, tupdesc, 3);
+    info->table_uuid = SPI_getvalue(tuple, tupdesc, 4);
+    info->metadata_location = SPI_getvalue(tuple, tupdesc, 5);
+    info->previous_metadata_location = SPI_getvalue(tuple, tupdesc, 6);
+    info->table_location = SPI_getvalue(tuple, tupdesc, 7);
+
+    value = SPI_getbinval(tuple, tupdesc, 8, &isnull);
+    info->last_column_id = isnull ? 0 : DatumGetInt32(value);
+
+    value = SPI_getbinval(tuple, tupdesc, 9, &isnull);
+    info->has_current_schema_id = !isnull;
+    info->current_schema_id = isnull ? 0 : DatumGetInt32(value);
+
+    value = SPI_getbinval(tuple, tupdesc, 10, &isnull);
+    info->has_current_snapshot_id = !isnull;
+    info->current_snapshot_id = isnull ? 0 : DatumGetInt64(value);
+
+    value = SPI_getbinval(tuple, tupdesc, 11, &isnull);
+    info->has_default_spec_id = !isnull;
+    info->default_spec_id = isnull ? 0 : DatumGetInt32(value);
+
+    MemoryContextSwitchTo(old_context);
+
+    return info;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Namespace operations                                               */
 /* ------------------------------------------------------------------ */
@@ -250,6 +292,68 @@ iceberg_meta_table_exists(const char *namespace_name, const char *table_name)
     PG_END_TRY();
 
     return exists;
+}
+
+/*
+ * Read the table head record from iceberg_catalog.tables_internal.
+ * Returns NULL if no matching table exists.
+ */
+MetaTableInfo *
+iceberg_meta_get_table(const char *namespace_name, const char *table_name)
+{
+    Datum values[2];
+    Oid argtypes[2] = {TEXTOID, TEXTOID};
+    MetaTableInfo *info = NULL;
+    MemoryContext caller_context = CurrentMemoryContext;
+    bool spi_connected = false;
+    int rc;
+
+    validate_name(namespace_name, "namespace_name");
+    validate_name(table_name, "table_name");
+
+    values[0] = CStringGetTextDatum(namespace_name);
+    values[1] = CStringGetTextDatum(table_name);
+
+    PG_TRY();
+    {
+        connect_spi();
+        spi_connected = true;
+        rc = ICEBERG_SPI_EXECUTE_WITH_ARGS(
+            "SELECT "
+            "    relid, namespace, table_name, table_uuid::text,"
+            "    metadata_location, previous_metadata_location, table_location,"
+            "    last_column_id, current_schema_id, current_snapshot_id, default_spec_id "
+            "FROM iceberg_catalog.tables_internal "
+            "WHERE namespace = $1 "
+            "  AND table_name = $2",
+            2,
+            argtypes,
+            values,
+            NULL,
+            true,
+            1);
+        if (rc != SPI_OK_SELECT)
+            ereport(ERROR,
+                    (errcode(ERRCODE_INTERNAL_ERROR),
+                     errmsg("metadata get table query failed")));
+
+        if (SPI_processed > 0)
+            info = copy_table_info_from_tuple(SPI_tuptable->vals[0],
+                                              SPI_tuptable->tupdesc,
+                                              caller_context);
+
+        finish_spi();
+        spi_connected = false;
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        finish_spi_quietly(&spi_connected);
+        throw_translated_spi_error(edata, "metadata get table query");
+    }
+    PG_END_TRY();
+
+    return info;
 }
 
 /* ------------------------------------------------------------------ */

@@ -12,7 +12,9 @@
 
 #include "postgres.h"
 #include "fmgr.h"
+#include "lib/stringinfo.h"
 #include "utils/builtins.h"
+#include "utils/json.h"
 #include "utils/jsonb.h"
 
 #include <stdlib.h>
@@ -56,6 +58,18 @@ temporary_last_column_id(const char *schema_json)
     }
 
     return max_id;
+}
+
+static Datum
+load_table_result_jsonb(const char *metadata_location)
+{
+    StringInfo buf = makeStringInfo();
+
+    appendStringInfoString(buf, "{\"metadata-location\":");
+    escape_json(buf, metadata_location);
+    appendStringInfoString(buf, ",\"metadata\":{},\"config\":{}}");
+
+    return DirectFunctionCall1(jsonb_in, CStringGetDatum(buf->data));
 }
 
 
@@ -312,22 +326,27 @@ iceberg_is_table_existed(PG_FUNCTION_ARGS)
                 (errcode(ERRCODE_ICEBERG_INVALID_PARAM),
                  errmsg("p_table is required and must not be empty")));
 
-    /* 3. TODO: Check table existence via META */
+    /* 3. Check table existence via META */
 
-    /* TODO:
-     * bool exists = iceberg_meta_table_exists(p_namespace, p_table);
-     * if (exists)
-     *     PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
-     *         CStringGetDatum("{\"exists\": true}")));
-     * else
-     *     PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
-     *         CStringGetDatum("{\"exists\": false}")));
-     */
+    bool exists = false;
 
-    /* 4. Return stub (TODO: replace with real META call) */
+    PG_TRY();
+    {
+        exists = iceberg_meta_table_exists(p_namespace, p_table);
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        iceberg_err_rethrow_metadata(edata, "table existence check");
+    }
+    PG_END_TRY();
 
-    PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
-        CStringGetDatum("{\"exists\": true}")));
+    if (exists)
+        PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
+            CStringGetDatum("{\"exists\": true}")));
+    else
+        PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
+            CStringGetDatum("{\"exists\": false}")));
 }
 
 
@@ -372,15 +391,25 @@ iceberg_load_table(PG_FUNCTION_ARGS)
                 (errcode(ERRCODE_ICEBERG_INVALID_PARAM),
                  errmsg("p_table is required and must not be empty")));
 
-    /* 3. TODO: Get table metadata via META */
+    /* 3. Get table metadata via META */
 
-    /* TODO:
-     * MetaTableInfo *info = iceberg_meta_get_table(p_namespace, p_table);
-     * if (info == NULL)
-     *     ereport(ERROR,
-     *             (errcode(ERRCODE_ICEBERG_NOT_FOUND),
-     *              errmsg("The given table does not exist")));
-     */
+    MetaTableInfo *info = NULL;
+
+    PG_TRY();
+    {
+        info = iceberg_meta_get_table(p_namespace, p_table);
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        iceberg_err_rethrow_metadata(edata, "load table metadata lookup");
+    }
+    PG_END_TRY();
+
+    if (info == NULL)
+        ereport(ERROR,
+                (errcode(ERRCODE_ICEBERG_NOT_FOUND),
+                 errmsg("The given table does not exist")));
 
     /* 4. TODO: Load table via SDK */
 
@@ -407,10 +436,14 @@ iceberg_load_table(PG_FUNCTION_ARGS)
      *     CStringGetDatum(buf->data)));
      */
 
-    /* 6. Return stub (TODO: replace with real data from SDK/META) */
+    /* 6. Return META-backed LoadTableResult shell until SDK loading is wired. */
 
-    PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
-        CStringGetDatum("{\"metadata-location\": \"TODO\", \"metadata\": {}, \"config\": {}}")));
+    {
+        Datum result = load_table_result_jsonb(info->metadata_location);
+
+        iceberg_meta_free_table_info(info);
+        PG_RETURN_DATUM(result);
+    }
 }
 
 
