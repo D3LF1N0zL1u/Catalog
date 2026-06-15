@@ -82,6 +82,16 @@ void iceberg_meta_register_table(const char *namespace_name,
                                  const MetaRegisterTableInput *input);
 
 /*
+ * Rename a table in the local metadata tables (service wrapper).
+ *
+ * Connects SPI, validates preconditions (source exists, destination does not),
+ * performs the rename via UPDATE, and finishes SPI.  Errors are translated
+ * via the internal throw_translated_spi_error pattern.
+ */
+void iceberg_meta_rename_table_record(const char *src_ns, const char *src_table,
+                                      const char *dst_ns, const char *dst_table);
+
+/*
  * Free a MetaTableInfo structure and all of its palloc'd string members.
  * Safe to call with NULL (no-op).
  */
