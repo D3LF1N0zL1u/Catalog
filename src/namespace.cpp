@@ -17,7 +17,9 @@
 
 #include <string.h>
 
+#include "errors.h"
 #include "iceberg_catalog.h"
+#include "metadata.h"
 #include "namespace.h"
 
 
@@ -80,11 +82,17 @@ iceberg_create_namespace(PG_FUNCTION_ARGS)
     else
         props_str = pstrdup("{}");
 
-    /* 5. TODO: META InsertNamespace
-     *
-     * iceberg_meta_insert_namespace(p_namespace, props_str);
-     * // PK violation → ereport(P0005) translated by META layer
-     */
+    /* 5. META InsertNamespace */
+    PG_TRY();
+    {
+        iceberg_meta_create_namespace(p_namespace, props_str);
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        iceberg_err_rethrow_metadata(edata, "create namespace metadata");
+    }
+    PG_END_TRY();
 
     /* 6. Construct and return response */
     StringInfoData buf;

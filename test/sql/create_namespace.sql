@@ -14,14 +14,22 @@ BEGIN;
 SELECT jsonb_typeof(iceberg_catalog.create_namespace('test_ns')) AS result_type;
 
 -- 2. 返回结构的顶层 key 校验：应包含 "namespace" 和 "properties"
+WITH created AS (
+    SELECT iceberg_catalog.create_namespace('test_ns_keys') AS result
+)
 SELECT
-    iceberg_catalog.create_namespace('test_ns') ? 'namespace'  AS has_namespace,
-    iceberg_catalog.create_namespace('test_ns') ? 'properties' AS has_properties;
+    result ? 'namespace'  AS has_namespace,
+    result ? 'properties' AS has_properties
+FROM created;
 
 -- 3. "namespace" 字段应为数组，且包含传入的命名空间
+WITH created AS (
+    SELECT iceberg_catalog.create_namespace('sales') AS result
+)
 SELECT
-    jsonb_typeof(iceberg_catalog.create_namespace('sales') -> 'namespace') AS namespace_type,
-    (iceberg_catalog.create_namespace('sales') -> 'namespace' -> 0)        AS first_element;
+    jsonb_typeof(result -> 'namespace') AS namespace_type,
+    (result -> 'namespace' -> 0)        AS first_element
+FROM created;
 
 -- 4. p_properties 传入空对象
 SELECT iceberg_catalog.create_namespace('ns_empty_props', '{}'::JSONB);
@@ -74,11 +82,11 @@ ROLLBACK TO SAVEPOINT sp12;
 -- 第三部分：未实现的功能 — 报错场景 (Stub 阶段不触发，但预留)
 -- ============================================================================
 
--- 13. TODO: 重复创建同一 namespace → 报错 (P0005)
--- SAVEPOINT sp13;
--- SELECT iceberg_catalog.create_namespace('dup_ns');
--- SELECT iceberg_catalog.create_namespace('dup_ns');  -- 第二次应报 P0005
--- ROLLBACK TO SAVEPOINT sp13;
+-- 13. 重复创建同一 namespace → 报错 (P0005)
+SAVEPOINT sp13;
+SELECT iceberg_catalog.create_namespace('dup_ns');
+SELECT iceberg_catalog.create_namespace('dup_ns');  -- 第二次应报 P0005
+ROLLBACK TO SAVEPOINT sp13;
 
 -- ============================================================================
 -- 第四部分：边界场景
@@ -100,5 +108,15 @@ SELECT iceberg_catalog.create_namespace(
     'arr_ns',
     '{"owners":["alice","bob"],"regions":["us","eu"]}'::JSONB
 );
+
+-- ============================================================================
+-- 第五部分：持久化验证
+-- ============================================================================
+
+-- 17. 验证 namespace 写入后可通过元数据表查询
+SELECT namespace, properties->>'owner' AS owner
+FROM iceberg_catalog.namespaces
+WHERE catalog_name = current_database()::text
+  AND namespace = 'accounting';
 
 ROLLBACK;

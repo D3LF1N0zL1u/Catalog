@@ -723,3 +723,89 @@ iceberg_meta_free_table_info(MetaTableInfo *info)
     pfree(info->table_location);
     pfree(info);
 }
+
+/* ------------------------------------------------------------------ */
+/*  Namespace creation                                                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Create a namespace in the local catalog.
+ *
+ * Validates the namespace name and properties JSON, then inserts a row
+ * into iceberg_catalog.namespaces.  Raises ERRCODE_DUPLICATE_OBJECT
+ * if the namespace already exists.
+ */
+void
+iceberg_meta_create_namespace(const char *namespace_name,
+                               const char *properties_json)
+{
+    Datum values[2];
+    Oid argtypes[2] = {TEXTOID, TEXTOID};
+    const char *props;
+    int rc;
+    bool spi_connected = false;
+
+    validate_name(namespace_name, "namespace_name");
+
+    props = (properties_json == NULL) ? "{}" : properties_json;
+
+    PG_TRY();
+    {
+        connect_spi();
+        spi_connected = true;
+
+        /* Validate properties is a JSON object */
+        {
+            Datum chk[1] = {CStringGetTextDatum(props)};
+            Oid chk_type[1] = {TEXTOID};
+            rc = ICEBERG_SPI_EXECUTE_WITH_ARGS(
+                "SELECT jsonb_typeof($1::jsonb) = 'object'",
+                1, chk_type, chk, NULL, true, 1);
+            if (rc != SPI_OK_SELECT || SPI_processed != 1)
+                ereport(ERROR,
+                        (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                         errmsg("failed to validate namespace properties JSON")));
+
+            {
+                bool isnull;
+                bool is_object = DatumGetBool(
+                    SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull));
+                if (!is_object)
+                    ereport(ERROR,
+                            (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                             errmsg("namespace properties must be a JSON object")));
+            }
+        }
+
+        /* Insert the namespace row */
+        values[0] = CStringGetTextDatum(namespace_name);
+        values[1] = CStringGetTextDatum(props);
+
+        rc = ICEBERG_SPI_EXECUTE_WITH_ARGS(
+            "INSERT INTO iceberg_catalog.namespaces("
+            "    catalog_name, namespace, properties"
+            ") VALUES ("
+            "    current_database()::text, $1, $2::jsonb"
+            ")",
+            2, argtypes, values, NULL, false, 0);
+        if (rc != SPI_OK_INSERT)
+            ereport(ERROR,
+                    (errcode(ERRCODE_INTERNAL_ERROR),
+                     errmsg("failed to insert namespace metadata")));
+
+        if (SPI_processed != 1)
+            ereport(ERROR,
+                    (errcode(ERRCODE_INTERNAL_ERROR),
+                     errmsg("unexpected namespace insert count")));
+
+        finish_spi();
+        spi_connected = false;
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        finish_spi_quietly(&spi_connected);
+        throw_translated_spi_error(edata, "metadata create namespace");
+    }
+    PG_END_TRY();
+}
