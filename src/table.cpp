@@ -22,6 +22,7 @@
 
 #include "errors.h"
 #include "iceberg_catalog.h"
+#include "iceberg_catalog_hook.h"
 #include "metadata.h"
 #include "table.h"
 
@@ -208,10 +209,53 @@ iceberg_create_table(PG_FUNCTION_ARGS)
      *                   "Failed to create table via SDK");
      */
 
-    /* 7. TODO: DDL CreateStorage */
+    /* 7. DDL CreateStorage */
+
+    /* 7.1 Optional delta-table creation hook (plugin B).
+     *
+     * Another extension can register a hook by including
+     * "iceberg_catalog_hook.h" and, in its _PG_init(), doing:
+     *
+     *   void **hook_ptr = find_rendezvous_variable(ICEBERG_CREATE_DELTA_TABLE_HOOK_VAR);
+     *   *hook_ptr = (void *) my_delta_table_hook;
+     *
+     * If a hook is registered, we invoke it here so it can create an
+     * internal openGauss table with the same schema.  Errors from the hook
+     * are wrapped with a clear "Create delta table failed" message.
+     */
+    {
+        char *schema_json = jsonb_to_cstring(p_schema);
+        void **hook_ptr = find_rendezvous_variable(ICEBERG_CREATE_DELTA_TABLE_HOOK_VAR);
+
+        if (hook_ptr != NULL && *hook_ptr != NULL) {
+            iceberg_create_delta_table_hook_type hook =
+                (iceberg_create_delta_table_hook_type) *hook_ptr;
+
+            PG_TRY();
+            {
+                hook(p_namespace, p_table_name, schema_json);
+            }
+            PG_CATCH();
+            {
+                ErrorData *edata = CopyErrorData();
+                char *original_message = edata->message == NULL
+                                             ? pstrdup("unknown error")
+                                             : pstrdup(edata->message);
+                FreeErrorData(edata);
+                FlushErrorState();
+
+                ereport(ERROR,
+                        (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+                         errmsg("Create delta table failed: %s", original_message)));
+            }
+            PG_END_TRY();
+        }
+    }
+
+    /* 7.2 TODO: Create Foreign Table */
 
     /* TODO:
-     * iceberg_ddl_CreateStorage(p_namespace, p_table_name, result);
+     * iceberg_ddl_CreateForeignTable(p_namespace, p_table_name, result);
      */
 
     /* 8. META InsertTable */
