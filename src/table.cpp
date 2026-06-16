@@ -730,11 +730,64 @@ iceberg_commit_table(PG_FUNCTION_ARGS)
      *                     errmsg("{\"type\":\"CommitFailedException\",\"message\":\"%s\",\"stack\":[]}", error_msg)));
      */
 
-    /* 7. META commit_table — TODO: iceberg_meta_lock_table, MetaCommitTableInput */
-    /* TODO: Replace with real SDK CommitTable result once modules are wired. */
+    /* 7. META commit_table (update table pointer + insert snapshot row) */
 
-    PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
-        CStringGetDatum("{\"metadata-location\": \"TODO\", \"metadata\": {}}")));
+    /*
+     * TODO: Replace these temporary values with the SDK CommitTable result
+     * once the SDK modules are wired up.
+     */
+    {
+        MetaTableInfo *info = NULL;
+        static int64_t next_snapshot_id = 1;
+
+        PG_TRY();
+        {
+            info = iceberg_meta_lock_table(p_namespace, p_table);
+        }
+        PG_CATCH();
+        {
+            ErrorData *edata = CopyErrorData();
+            iceberg_err_rethrow_metadata(edata, "commit table metadata lock");
+        }
+        PG_END_TRY();
+
+        MetaCommitTableInput meta_input;
+
+        memset(&meta_input, 0, sizeof(meta_input));
+        meta_input.namespace_name = p_namespace;
+        meta_input.table_name = p_table;
+        meta_input.table_uuid = info->table_uuid;
+        meta_input.old_metadata_location = info->metadata_location;
+        meta_input.new_metadata_location = psprintf("file:///tmp/iceberg_catalog/%s/%s/metadata/v2.metadata.json",
+                                                     p_namespace, p_table);
+        meta_input.new_snapshot_id = next_snapshot_id++;
+        meta_input.snapshot_schema_id = info->current_schema_id;
+        meta_input.has_snapshot_schema_id = info->has_current_schema_id;
+        meta_input.snapshot_timestamp_ms = 0;
+        meta_input.manifest_list = NULL;
+        meta_input.total_records = 0;
+        meta_input.has_total_records = false;
+
+        PG_TRY();
+        {
+            iceberg_meta_commit_table(&meta_input);
+        }
+        PG_CATCH();
+        {
+            iceberg_meta_free_table_info(info);
+            ErrorData *edata = CopyErrorData();
+            iceberg_err_rethrow_metadata(edata, "commit table metadata commit");
+        }
+        PG_END_TRY();
+
+        iceberg_meta_free_table_info(info);
+
+        /* 8. Return response with the new metadata location */
+
+        PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
+            CStringGetDatum(psprintf("{\"metadata-location\": \"%s\", \"metadata\": {}}",
+                                     meta_input.new_metadata_location))));
+    }
 }
 
 
@@ -843,11 +896,74 @@ iceberg_add_column(PG_FUNCTION_ARGS)
      * newSchemaId = table->GetCurrentSchemaId() + 1;
      */
 
-    /* 7. META commit_schema_change — TODO: iceberg_meta_lock_table, MetaCommitSchemaChangeInput */
-    /* TODO: Replace with real SDK AddColumn result once modules are wired. */
+    /* 7. META commit_schema_change (update table pointer + insert schema row) */
 
-    PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
-        CStringGetDatum("{\"metadata-location\": \"TODO\", \"metadata\": {}}")));
+    /*
+     * TODO: Replace these temporary values with the SDK AddColumn/CommitTable
+     * result once the SDK modules are wired up.
+     */
+    {
+        MetaTableInfo *info = NULL;
+
+        PG_TRY();
+        {
+            info = iceberg_meta_lock_table(p_namespace, p_table);
+        }
+        PG_CATCH();
+        {
+            ErrorData *edata = CopyErrorData();
+            iceberg_err_rethrow_metadata(edata, "add column metadata lock");
+        }
+        PG_END_TRY();
+
+        int new_last_column_id = info->last_column_id + 1;
+        int new_schema_id = info->current_schema_id + 1;
+
+        /*
+         * TODO: Replace this temporary schema JSON with the real schema from
+         * the SDK AddColumn result once wired up.
+         */
+        char *new_schema_json = psprintf(
+            "{\"type\":\"struct\",\"fields\":["
+            "{\"id\":%d,\"name\":\"%s\",\"required\":false,\"type\":\"%s\""
+            "%s%s\"}]}",
+            new_last_column_id, p_column_name, p_column_type,
+            p_column_doc != NULL ? ",\"doc\":\"" : "",
+            p_column_doc != NULL ? p_column_doc : "");
+
+        MetaCommitSchemaChangeInput meta_input;
+
+        memset(&meta_input, 0, sizeof(meta_input));
+        meta_input.namespace_name = p_namespace;
+        meta_input.table_name = p_table;
+        meta_input.table_uuid = info->table_uuid;
+        meta_input.old_metadata_location = info->metadata_location;
+        meta_input.new_metadata_location = psprintf("file:///tmp/iceberg_catalog/%s/%s/metadata/v2.metadata.json",
+                                                     p_namespace, p_table);
+        meta_input.new_schema_id = new_schema_id;
+        meta_input.schema_json = new_schema_json;
+        meta_input.new_last_column_id = new_last_column_id;
+
+        PG_TRY();
+        {
+            iceberg_meta_commit_schema_change(&meta_input);
+        }
+        PG_CATCH();
+        {
+            iceberg_meta_free_table_info(info);
+            ErrorData *edata = CopyErrorData();
+            iceberg_err_rethrow_metadata(edata, "add column metadata commit");
+        }
+        PG_END_TRY();
+
+        iceberg_meta_free_table_info(info);
+
+        /* 8. Return response with the new metadata location */
+
+        PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
+            CStringGetDatum(psprintf("{\"metadata-location\": \"%s\", \"metadata\": {}}",
+                                     meta_input.new_metadata_location))));
+    }
 }
 
 /* ---- list_tables ---- */
