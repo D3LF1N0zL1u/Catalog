@@ -3,9 +3,6 @@
  * namespace.cpp
  *    Iceberg namespace SQL function implementations.
  *
- * Stub implementation: META operations are marked as TODO, pending the
- * underlying modules to be wired up. Currently returns a minimal response.
- *
  *-------------------------------------------------------------------------
  */
 
@@ -103,4 +100,55 @@ iceberg_create_namespace(PG_FUNCTION_ARGS)
         p_namespace, props_str);
     PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
         CStringGetDatum(buf.data)));
+}
+
+
+/* ---- is_namespace_existed ---- */
+PG_FUNCTION_INFO_V1(iceberg_is_namespace_existed);
+
+Datum
+iceberg_is_namespace_existed(PG_FUNCTION_ARGS)
+{
+    /*-------------------------------------------------------------------------
+     * Parameters:
+     *   1. p_namespace  TEXT  (required)
+     *
+     * Returns: JSONB
+     *   {"exists": true}   — namespace exists
+     *   {"exists": false}  — namespace does not exist (no exception thrown)
+     *-------------------------------------------------------------------------
+     */
+
+    /* 1. Extract parameters from PG_FUNCTION_ARGS */
+    if (PG_NARGS() < 1)
+        elog(ERROR, "iceberg_is_namespace_existed: expected 1 argument, got %d", PG_NARGS());
+
+    /* p_namespace (required) */
+    char *p_namespace = NULL;
+    if (!PG_ARGISNULL(0))
+        p_namespace = text_to_cstring(PG_GETARG_TEXT_P(0));
+
+    /* 2. Validate required parameters */
+    if (p_namespace == NULL || strlen(p_namespace) == 0)
+        ereport(ERROR,
+                (errcode(ERRCODE_ICEBERG_INVALID_PARAM),
+                 errmsg("namespace must not be empty")));
+
+    /* 3. Check namespace existence via META */
+    bool exists = false;
+
+    PG_TRY();
+    {
+        exists = iceberg_meta_namespace_exists(p_namespace);
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        iceberg_err_rethrow_metadata(edata, "check namespace existence");
+    }
+    PG_END_TRY();
+
+    /* 4. Return result */
+    PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
+        CStringGetDatum(exists ? "{\"exists\": true}" : "{\"exists\": false}")));
 }
