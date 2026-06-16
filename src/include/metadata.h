@@ -112,4 +112,14 @@ void iceberg_meta_rename_table_record(const char *src_ns, const char *src_table,
  */
 void iceberg_meta_free_table_info(MetaTableInfo *info);
 
+/*
+ * Create a namespace in the local catalog.
+ *
+ * Validates the namespace name and properties JSON, then inserts a row
+ * into iceberg_catalog.namespaces.  Raises ERRCODE_DUPLICATE_OBJECT if
+ * the namespace already exists.
+ */
+void iceberg_meta_create_namespace(const char *namespace_name,
+                                    const char *properties_json);
+
 #endif /* ICEBERG_CATALOG_METADATA_H */
