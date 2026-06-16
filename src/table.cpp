@@ -568,12 +568,18 @@ iceberg_drop_table(PG_FUNCTION_ARGS)
      * iceberg_ddl_DropStorage(p_namespace, p_table);
      */
 
-    /* 5. TODO: META DeleteTable */
+    /* 5. META DeleteTable (cascade handles related rows) */
 
-    /* TODO:
-     * iceberg_meta_drop_table_record(p_namespace, p_table);
-     * // ON DELETE CASCADE handles related rows
-     */
+    PG_TRY();
+    {
+        iceberg_meta_drop_table_record(p_namespace, p_table);
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        iceberg_err_rethrow_metadata(edata, "drop table metadata delete");
+    }
+    PG_END_TRY();
 
     /* 6. TODO: SDK DropTable is reserved (best-effort metadata cleanup).
      *

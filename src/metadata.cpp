@@ -707,6 +707,59 @@ iceberg_meta_register_table(const char *namespace_name,
 }
 
 /* ------------------------------------------------------------------ */
+/*  Drop table helpers                                                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Delete a table row from tables_internal (no SPI management).
+ */
+static void
+iceberg_meta_delete_table(const char *ns, const char *tbl)
+{
+    Datum v[2] = {CStringGetTextDatum(ns), CStringGetTextDatum(tbl)};
+    Oid t[2] = {TEXTOID, TEXTOID};
+    int rc = ICEBERG_SPI_EXECUTE_WITH_ARGS(
+        "DELETE FROM iceberg_catalog.tables_internal WHERE namespace = $1 AND table_name = $2",
+        2, t, v, NULL, false, 0);
+    if (rc != SPI_OK_DELETE)
+        ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR), errmsg("failed to delete table metadata")));
+    if (SPI_processed == 0)
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT), errmsg("table not found")));
+}
+
+/*
+ * Delete a table from the local metadata tables (service wrapper).
+ *
+ * Connects SPI, deletes the table head row from tables_internal, and
+ * relies on ON DELETE CASCADE for dependent rows.
+ */
+void
+iceberg_meta_drop_table_record(const char *namespace_name,
+                                const char *table_name)
+{
+    bool spi_connected = false;
+
+    validate_name(namespace_name, "namespace_name");
+    validate_name(table_name, "table_name");
+
+    PG_TRY();
+    {
+        connect_spi();
+        spi_connected = true;
+        iceberg_meta_delete_table(namespace_name, table_name);
+        finish_spi();
+        spi_connected = false;
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        finish_spi_quietly(&spi_connected);
+        throw_translated_spi_error(edata, "metadata drop table record");
+    }
+    PG_END_TRY();
+}
+
+/* ------------------------------------------------------------------ */
 /*  Rename table                                                       */
 /* ------------------------------------------------------------------ */
 

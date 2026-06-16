@@ -82,6 +82,15 @@ void iceberg_meta_register_table(const char *namespace_name,
                                  const MetaRegisterTableInput *input);
 
 /*
+ * Delete a table from the local metadata tables (service wrapper).
+ *
+ * Connects SPI, deletes the table head row from tables_internal, and
+ * relies on ON DELETE CASCADE for dependent rows.
+ */
+void iceberg_meta_drop_table_record(const char *namespace_name,
+                                     const char *table_name);
+
+/*
  * Rename a table in the local metadata tables (service wrapper).
  *
  * Connects SPI, validates preconditions (source exists, destination does not),
