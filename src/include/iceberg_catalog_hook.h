@@ -3,10 +3,9 @@
  * iceberg_catalog_hook.h
  *    Public hook interface for the iceberg_catalog extension.
  *
- * Other extensions can register callbacks via the rendezvous variable
- * ICEBERG_CREATE_DELTA_TABLE_HOOK_VAR.  iceberg_catalog will invoke the
- * registered callback during CREATE TABLE processing.
- *
+ * Other extensions can register callbacks via the rendezvous variables
+ * defined below.  iceberg_catalog will invoke the registered callbacks
+ * during CREATE TABLE and DROP TABLE processing.
  *-------------------------------------------------------------------------
  */
 
@@ -41,6 +40,32 @@ typedef void (*iceberg_create_delta_table_hook_type)(
  * variable in its _PG_init(); iceberg_catalog reads it during create_table.
  */
 #define ICEBERG_CREATE_DELTA_TABLE_HOOK_VAR "iceberg_create_delta_table_hook"
+
+/*
+ * Hook called during iceberg_catalog.drop_table() after validation and the
+ * purge check, before the META DeleteTable step.  Plugin B can use this
+ * hook to drop the internal openGauss table that was created alongside the
+ * Iceberg table.
+ *
+ * Parameters:
+ *   namespace_name - target namespace
+ *   table_name     - target table name
+ *   purge          - whether the caller requested purge
+ *
+ * The hook has no return value.  On error it should use ereport(ERROR, ...);
+ * the error will be propagated by iceberg_catalog.
+ */
+typedef void (*iceberg_drop_delta_table_hook_type)(
+    const char *namespace_name,
+    const char *table_name,
+    bool        purge
+);
+
+/*
+ * Rendezvous variable name.  Plugin B sets the pointer stored at this
+ * variable in its _PG_init(); iceberg_catalog reads it during drop_table.
+ */
+#define ICEBERG_DROP_DELTA_TABLE_HOOK_VAR "iceberg_drop_delta_table_hook"
 
 #ifdef __cplusplus
 }
