@@ -262,19 +262,21 @@ rename_table(p_src_ns TEXT, p_src_table TEXT,
              p_dst_ns TEXT, p_dst_table TEXT) → JSONB
 
 1. 任一参数为 NULL 或空串 → ereport(P0001)
-2. if !META.TableExists(p_src_ns, p_src_table)  → ereport(P0004)
-3. if !META.NamespaceExists(p_dst_ns)            → ereport(P0004)
-4. if META.TableExists(p_dst_ns, p_dst_table)    → ereport(P0005)
+2. META.LockNamespaceForShare(p_dst_ns)
+   // 目标 Namespace 不存在 → ereport(P0004)
 
-5. META.RenameTable(p_src_ns, p_src_table, p_dst_ns, p_dst_table)
+3. META.RenameTable(p_src_ns, p_src_table, p_dst_ns, p_dst_table)
+   // 直接 UPDATE tables_internal SET namespace/table_name
+   // UPDATE 影响 0 行 → 源 Table 不存在 → ereport(P0004)
+   // PK (namespace, table_name) 冲突 → 目标 Table 已存在 → ereport(P0005)
 
-6. // SDK：若需同步更新 S3 路径，调用 catalog->RenameTable（预留）
+4. // SDK：若需同步更新 S3 路径，调用 catalog->RenameTable（预留）
    // 标准 Iceberg 中此步骤为空操作
    error_msg = NULL
    catalog->RenameTable(p_src_ns, p_src_table, p_dst_ns, p_dst_table, &error_msg)
    SDK_CHECK((void*)1/*non-null sentinel*/, error_msg, "ServiceUnavailable")
 
-7. return {"success": true}
+5. return {"success": true}
 ```
 
 ### 7.10 create_table

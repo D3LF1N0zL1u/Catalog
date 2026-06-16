@@ -475,40 +475,20 @@ iceberg_rename_table(PG_FUNCTION_ARGS)
                 (errcode(ERRCODE_ICEBERG_INVALID_PARAM),
                  errmsg("p_dst_table is required and must not be empty")));
 
-    /* 3. TODO: Check source table exists via META */
+    /* 3. META RenameTable */
 
-    /* TODO:
-     * if (!iceberg_meta_table_exists(p_src_ns, p_src_table))
-     *     ereport(ERROR,
-     *             (errcode(ERRCODE_ICEBERG_NOT_FOUND),
-     *              errmsg("The given source table does not exist")));
-     */
+    PG_TRY();
+    {
+        iceberg_meta_rename_table_record(p_src_ns, p_src_table, p_dst_ns, p_dst_table);
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        iceberg_err_rethrow_metadata(edata, "rename table metadata");
+    }
+    PG_END_TRY();
 
-    /* 4. TODO: Check destination namespace exists via META */
-
-    /* TODO:
-     * if (!iceberg_meta_namespace_exists(p_dst_ns))
-     *     ereport(ERROR,
-     *             (errcode(ERRCODE_ICEBERG_NOT_FOUND),
-     *              errmsg("The given destination namespace does not exist")));
-     */
-
-    /* 5. TODO: Check destination table does not exist via META */
-
-    /* TODO:
-     * if (iceberg_meta_table_exists(p_dst_ns, p_dst_table))
-     *     ereport(ERROR,
-     *             (errcode(ERRCODE_ICEBERG_CONFLICT),
-     *              errmsg("The requested table identifier already exists")));
-     */
-
-    /* 6. TODO: META RenameTable */
-
-    /* TODO:
-     * iceberg_meta_rename_table_record(p_src_ns, p_src_table, p_dst_ns, p_dst_table);
-     */
-
-    /* 7. NOTE: SDK RenameTable is not needed.
+    /* 4. NOTE: SDK RenameTable is not needed.
      *
      * The design doc reserves catalog->RenameTable() for implementations that
      * migrate S3 paths on rename. In standard Iceberg, rename only updates the
@@ -520,7 +500,7 @@ iceberg_rename_table(PG_FUNCTION_ARGS)
      * No SDK call required. META is the single source of truth for rename.
      */
 
-    /* 8. Return success */
+    /* 5. Return success */
 
     PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
         CStringGetDatum("{\"success\": true}")));

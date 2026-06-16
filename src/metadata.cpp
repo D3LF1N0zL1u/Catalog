@@ -706,6 +706,110 @@ iceberg_meta_register_table(const char *namespace_name,
     PG_END_TRY();
 }
 
+/* ------------------------------------------------------------------ */
+/*  Rename table                                                       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Internal rename implementation.  Assumes SPI is already connected.
+ *
+ * Per design doc section 7.9:
+ *   1. Lock the destination namespace (FOR SHARE).
+ *   2. UPDATE the source row with the new namespace/table_name.
+ *   3. Use UPDATE row count and the primary key constraint to detect
+ *      source-missing and destination-conflict cases.
+ */
+static void
+iceberg_meta_rename_table(const char *src_ns, const char *src_table,
+                          const char *dst_ns, const char *dst_table)
+{
+    Oid text_arg[4] = {TEXTOID, TEXTOID, TEXTOID, TEXTOID};
+    int rc;
+
+    validate_name(src_ns, "src_ns");
+    validate_name(src_table, "src_table");
+    validate_name(dst_ns, "dst_ns");
+    validate_name(dst_table, "dst_table");
+
+    /* 1. Lock the destination namespace (FOR SHARE) */
+    {
+        Datum v[1] = {CStringGetTextDatum(dst_ns)};
+        rc = ICEBERG_SPI_EXECUTE_WITH_ARGS(
+            "SELECT 1 "
+            "FROM iceberg_catalog.namespaces "
+            "WHERE catalog_name = current_database()::text "
+            "  AND namespace = $1 "
+            "FOR SHARE",
+            1, text_arg, v, NULL, false, 1);
+    }
+    if (rc != SPI_OK_SELECT)
+        ereport(ERROR,
+                (errcode(ERRCODE_INTERNAL_ERROR),
+                 errmsg("failed to lock destination namespace")));
+    if (SPI_processed == 0)
+        ereport(ERROR,
+                (errcode(ERRCODE_UNDEFINED_OBJECT),
+                 errmsg("destination namespace not found")));
+
+    /* 2. Perform the rename (UPDATE). The PK handles destination conflicts. */
+    {
+        Datum v[4] = {CStringGetTextDatum(src_ns), CStringGetTextDatum(src_table),
+                      CStringGetTextDatum(dst_ns), CStringGetTextDatum(dst_table)};
+        rc = ICEBERG_SPI_EXECUTE_WITH_ARGS(
+            "UPDATE iceberg_catalog.tables_internal "
+            "SET namespace = $3, table_name = $4 "
+            "WHERE namespace = $1 "
+            "  AND table_name = $2",
+            4, text_arg, v, NULL, false, 0);
+    }
+    if (rc != SPI_OK_UPDATE)
+        ereport(ERROR,
+                (errcode(ERRCODE_INTERNAL_ERROR),
+                 errmsg("failed to rename table metadata")));
+
+    if (SPI_processed == 0)
+        ereport(ERROR,
+                (errcode(ERRCODE_UNDEFINED_OBJECT),
+                 errmsg("source table not found")));
+}
+
+/*
+ * Rename a table in the local metadata tables (service wrapper).
+ *
+ * Connects SPI, performs the rename (including preconditions), and
+ * finishes SPI.  Errors are translated via the internal
+ * throw_translated_spi_error pattern.
+ */
+void
+iceberg_meta_rename_table_record(const char *src_ns, const char *src_table,
+                                 const char *dst_ns, const char *dst_table)
+{
+    bool spi_connected = false;
+
+    PG_TRY();
+    {
+        connect_spi();
+        spi_connected = true;
+        iceberg_meta_rename_table(src_ns, src_table, dst_ns, dst_table);
+        finish_spi();
+        spi_connected = false;
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        finish_spi_quietly(&spi_connected);
+        if (edata->sqlerrcode == ERRCODE_UNIQUE_VIOLATION) {
+            FreeErrorData(edata);
+            FlushErrorState();
+            ereport(ERROR,
+                    (errcode(ERRCODE_DUPLICATE_OBJECT),
+                     errmsg("destination table already exists")));
+        }
+        throw_translated_spi_error(edata, "metadata rename table");
+    }
+    PG_END_TRY();
+}
+
 /*
  * Free a MetaTableInfo and all its palloc'd members.
  */
