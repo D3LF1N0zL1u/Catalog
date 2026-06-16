@@ -1,36 +1,71 @@
 -- ============================================================================
--- iceberg_catalog.is_table_existed 测试用例
+-- iceberg_catalog.is_table_existed test cases
 -- ============================================================================
 
 BEGIN;
 
--- 1. 基础调用：表存在返回 {"exists": true}
+INSERT INTO iceberg_catalog.namespaces(catalog_name, namespace, properties)
+VALUES (current_database(), 'test_ns', '{}'::JSONB);
+
+CREATE TABLE is_table_existed_rel(id int);
+
+INSERT INTO iceberg_catalog.tables_internal(
+    relid,
+    namespace,
+    table_name,
+    table_uuid,
+    metadata_location,
+    previous_metadata_location,
+    table_location,
+    last_column_id,
+    current_schema_id,
+    current_snapshot_id,
+    default_spec_id
+)
+VALUES (
+    'is_table_existed_rel'::regclass,
+    'test_ns',
+    'test_tbl',
+    '22222222-2222-2222-2222-222222222222',
+    'file:///tmp/test_ns/test_tbl/metadata/v1.metadata.json',
+    NULL,
+    'file:///tmp/test_ns/test_tbl',
+    1,
+    0,
+    NULL,
+    0
+);
+
+-- 1. Existing table returns {"exists": true}.
 SELECT iceberg_catalog.is_table_existed('test_ns', 'test_tbl');
 
--- 2. 验证返回类型为 JSONB object
+-- 2. Missing table returns {"exists": false}.
+SELECT iceberg_catalog.is_table_existed('test_ns', 'missing_tbl');
+
+-- 3. Return value is a JSONB object.
 SELECT jsonb_typeof(iceberg_catalog.is_table_existed('test_ns', 'test_tbl')) AS result_type;
 
--- 3. 验证返回结构包含 exists key
+-- 4. Return value contains the exists key.
 SELECT iceberg_catalog.is_table_existed('test_ns', 'test_tbl') ? 'exists' AS has_exists;
 
--- 4. p_namespace 为空串 → 报错
-SAVEPOINT sp4;
-SELECT iceberg_catalog.is_table_existed('', 'tbl');
-ROLLBACK TO SAVEPOINT sp4;
-
--- 5. p_table 为空串 → 报错
+-- 5. Empty p_namespace errors.
 SAVEPOINT sp5;
-SELECT iceberg_catalog.is_table_existed('ns', '');
+SELECT iceberg_catalog.is_table_existed('', 'tbl');
 ROLLBACK TO SAVEPOINT sp5;
 
--- 6. p_namespace 为 NULL → 报错
+-- 6. Empty p_table errors.
 SAVEPOINT sp6;
-SELECT iceberg_catalog.is_table_existed(NULL, 'tbl');
+SELECT iceberg_catalog.is_table_existed('ns', '');
 ROLLBACK TO SAVEPOINT sp6;
 
--- 7. p_table 为 NULL → 报错
+-- 7. NULL p_namespace errors.
 SAVEPOINT sp7;
-SELECT iceberg_catalog.is_table_existed('ns', NULL);
+SELECT iceberg_catalog.is_table_existed(NULL, 'tbl');
 ROLLBACK TO SAVEPOINT sp7;
+
+-- 8. NULL p_table errors.
+SAVEPOINT sp8;
+SELECT iceberg_catalog.is_table_existed('ns', NULL);
+ROLLBACK TO SAVEPOINT sp8;
 
 ROLLBACK;
