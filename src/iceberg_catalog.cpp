@@ -18,12 +18,13 @@ PG_MODULE_MAGIC;
 /*
  * _PG_init
  *
- * Create the rendezvous variable that optional extensions can use to
- * register a delta-table creation hook.  If no extension registers the
- * hook, the pointer remains NULL and create_table proceeds normally.
+ * Create the rendezvous variables that optional extensions can use to
+ * register delta-table creation/drop hooks.  If no extension registers a
+ * hook, the pointer remains NULL and iceberg_catalog proceeds normally.
  */
-void
+extern "C" void
 _PG_init(void)
 {
     (void) find_rendezvous_variable(ICEBERG_CREATE_DELTA_TABLE_HOOK_VAR);
+    (void) find_rendezvous_variable(ICEBERG_DROP_DELTA_TABLE_HOOK_VAR);
 }

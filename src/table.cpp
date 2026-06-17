@@ -639,10 +639,52 @@ iceberg_drop_table(PG_FUNCTION_ARGS)
                 (errcode(ERRCODE_ICEBERG_NOT_SUPPORTED),
                  errmsg("p_purge is not yet supported")));
 
-    /* 4. TODO: DDL DropStorage */
+    /* 4. DDL DropStorage */
+
+    /* 4.1 Optional delta-table drop hook (plugin B).
+     *
+     * Another extension can register a hook by including
+     * "iceberg_catalog_hook.h" and, in its _PG_init(), doing:
+     *
+     *   void **hook_ptr = find_rendezvous_variable(ICEBERG_DROP_DELTA_TABLE_HOOK_VAR);
+     *   *hook_ptr = (void *) my_delta_table_drop_hook;
+     *
+     * If a hook is registered, we invoke it here so it can drop the internal
+     * openGauss table that was created alongside this Iceberg table.  Errors
+     * from the hook are wrapped with a clear "Drop delta table failed" message.
+     */
+    {
+        void **hook_ptr = find_rendezvous_variable(ICEBERG_DROP_DELTA_TABLE_HOOK_VAR);
+
+        if (hook_ptr != NULL && *hook_ptr != NULL) {
+            iceberg_drop_delta_table_hook_type hook =
+                (iceberg_drop_delta_table_hook_type) *hook_ptr;
+
+            PG_TRY();
+            {
+                hook(p_namespace, p_table, p_purge);
+            }
+            PG_CATCH();
+            {
+                ErrorData *edata = CopyErrorData();
+                char *original_message = edata->message == NULL
+                                             ? pstrdup("unknown error")
+                                             : pstrdup(edata->message);
+                FreeErrorData(edata);
+                FlushErrorState();
+
+                ereport(ERROR,
+                        (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+                         errmsg("Drop delta table failed: %s", original_message)));
+            }
+            PG_END_TRY();
+        }
+    }
+
+    /* 4.2 TODO: Drop Foreign Table */
 
     /* TODO:
-     * iceberg_ddl_DropStorage(p_namespace, p_table);
+     * iceberg_ddl_DropForeignTable(p_namespace, p_table);
      */
 
     /* 5. META DeleteTable (cascade handles related rows) */
