@@ -5,5 +5,6 @@
 
 extern "C" Datum iceberg_create_namespace(PG_FUNCTION_ARGS);
 extern "C" Datum iceberg_is_namespace_existed(PG_FUNCTION_ARGS);
+extern "C" Datum iceberg_load_namespace(PG_FUNCTION_ARGS);
 
 #endif /* ICEBERG_CATALOG_NAMESPACE_H */
