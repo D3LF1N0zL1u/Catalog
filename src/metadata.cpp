@@ -87,8 +87,9 @@ static void
 finish_spi_quietly(bool *spi_connected)
 {
     if (spi_connected != NULL && *spi_connected) {
-        /* ERROR cleanup path: ignore SPI_finish failures and preserve the original error. */
-        (void) SPI_finish();
+        /* ERROR cleanup path: skip SPI_finish() — let transaction abort
+         * clean up SPI.  Calling SPI_finish() here destroys the SPI context
+         * and makes any subsequent ereport/elog corrupt the error stack. */
         *spi_connected = false;
     }
 }
@@ -104,15 +105,21 @@ throw_translated_spi_error(ErrorData *edata, const char *context)
     int sqlerrcode = edata->sqlerrcode;
     char *message;
 
-    if (is_metadata_sqlstate(sqlerrcode)) {
-        FreeErrorData(edata);
-        PG_RE_THROW();
-    }
-
     message = edata->message == NULL ? pstrdup("metadata SPI operation failed")
                                      : pstrdup(edata->message);
     FreeErrorData(edata);
     FlushErrorState();
+
+    /*
+     * Metadata SQLSTATEs are part of the module contract and are re-thrown
+     * unchanged.  A fresh ereport() is used instead of PG_RE_THROW() because
+     * finish_spi_quietly() has already marked the SPI connection as closed
+     * (the transaction abort will clean up SPI resources).
+     */
+    if (is_metadata_sqlstate(sqlerrcode))
+        ereport(ERROR,
+                (errcode(sqlerrcode),
+                 errmsg("%s", message)));
 
     if (sqlerrcode == ERRCODE_UNIQUE_VIOLATION)
         ereport(ERROR,
