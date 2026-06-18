@@ -53,7 +53,7 @@ validate_name(const char *value, const char *name)
 /*  SPI lifecycle helpers                                              */
 /* ------------------------------------------------------------------ */
 
-static void
+void
 connect_spi(void)
 {
     if (SPI_connect() != SPI_OK_CONNECT)
@@ -62,7 +62,7 @@ connect_spi(void)
                  errmsg("failed to connect to SPI")));
 }
 
-static void
+void
 finish_spi(void)
 {
     if (SPI_finish() != SPI_OK_FINISH)

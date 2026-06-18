@@ -17,6 +17,12 @@
 #include "postgres.h"
 
 /*
+ * Thin SPI lifecycle wrappers shared across the extension.
+ */
+void connect_spi(void);
+void finish_spi(void);
+
+/*
  * MetaTableInfo -- fields that map to columns in iceberg_catalog.tables_internal.
  *
  * Boolean "has_" flags distinguish between "field is 0 / false"
