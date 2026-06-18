@@ -5,11 +5,12 @@ OBJS = src/iceberg_catalog.o src/table.o src/namespace.o src/metadata.o src/erro
 
 EXTENSION = iceberg_catalog
 DATA = iceberg_catalog--1.0.0.sql
-PG_CPPFLAGS += -I$(srcdir)/src/include
+PG_CPPFLAGS += -I$(srcdir)/src/include -I$(srcdir)/deps
 ifdef GAUSS_SRC
 PG_CPPFLAGS += -I$(GAUSS_SRC)/src/include
 endif
 CXXFLAGS += -Wall -Wextra -Werror
+SHLIB_LINK += -L$(srcdir)/deps -liceberg_rust_bridge -Wl,-rpath,$(CURDIR)/deps
 
 PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)

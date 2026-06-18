@@ -196,49 +196,109 @@ iceberg_create_table(PG_FUNCTION_ARGS)
     }
     PG_END_TRY();
 
-    /* 6. TODO: SDK CreateTable */
-
-    /* TODO:
-     * IcebergCatalog *catalog = get_iceberg_catalog();
-     * LoadTableResult result = catalog->CreateTable(
-     *     p_namespace, p_table_name, p_schema,
-     *     p_location, p_partition_spec, p_write_order,
-     *     p_stage_create, p_properties);
-     * if (result.error)
-     *     iceberg_error(ERRCODE_ICEBERG_INTERNAL_ERROR,
-     *                   "RuntimeException",
-     *                   "Failed to create table via SDK");
-     */
-
-    /* ft_relid is set by the bridge in section 7.2; section 8 is
-     * skipped when the bridge succeeds (iceberg_fdw wrote metadata). */
-    Oid ft_relid = InvalidOid;
-
-    /* 7. DDL CreateStorage */
-
-    /* 7.1 Optional delta-table creation hook (plugin B).
-     *
-     * Another extension can register a hook by including
-     * "iceberg_catalog_hook.h" and, in its _PG_init(), doing:
-     *
-     *   void **hook_ptr = find_rendezvous_variable(ICEBERG_CREATE_DELTA_TABLE_HOOK_VAR);
-     *   *hook_ptr = (void *) my_delta_table_hook;
-     *
-     * If a hook is registered, we invoke it here so it can create an
-     * internal openGauss table with the same schema.  Errors from the hook
-     * are wrapped with a clear "Create delta table failed" message.
-     */
+    /* 6. SDK CreateTable */
     {
+        IcebergBridgeStorage *storage = open_iceberg_storage();
+        IcebergBridgeError   *error   = NULL;
+        IcebergBridgeStatus   status;
+
         char *schema_json = jsonb_to_cstring(p_schema);
-        void **hook_ptr = find_rendezvous_variable(ICEBERG_CREATE_DELTA_TABLE_HOOK_VAR);
 
-        if (hook_ptr != NULL && *hook_ptr != NULL) {
-            iceberg_create_delta_table_hook_type hook =
-                (iceberg_create_delta_table_hook_type) *hook_ptr;
+        /* 6.1 Determine table location.
+         * TODO: explicit p_location > namespace LOCATION > ICEBERG_WAREHOUSE */
+        const char *warehouse = getenv("ICEBERG_WAREHOUSE");
+        if (!warehouse)
+            ereport(ERROR,
+                    (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+                     errmsg("ICEBERG_WAREHOUSE is not set")));
+        char *table_location_str = p_location
+            ? p_location
+            : psprintf("%s/%s/%s", warehouse, p_namespace, p_table_name);
 
+        /* 6.2 Create table via bridge SDK (handles namespace implicitly). */
+        StringInfoData creation_buf;
+        initStringInfo(&creation_buf);
+        appendStringInfo(&creation_buf,
+            "{\"name\":\"%s\","
+            "\"schema\":%s,"
+            "\"location\":\"%s\","
+            "\"namespace\":[\"%s\"]}",
+            p_table_name, schema_json, table_location_str, p_namespace);
+
+        IcebergBridgeTable *table = NULL;
+        status = iceberg_bridge_table_create(
+            storage, creation_buf.data, &table, &error);
+
+        if (status != ICEBERG_BRIDGE_OK) {
+            const char *msg = error ? pstrdup(iceberg_bridge_error_message(error)) : "create table failed";
+            iceberg_bridge_error_free(error);
+            iceberg_bridge_storage_release(storage);
+            ereport(ERROR,
+                    (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+                     errmsg("iceberg_create_table: %s", msg)));
+        }
+
+        /* storage no longer needed after table creation. */
+        iceberg_bridge_storage_release(storage);
+
+        /* 7. DDL CreateStorage */
+
+        /* ft_relid is set by section 7.2; section 8 uses it as the real relid. */
+        Oid ft_relid = InvalidOid;
+
+        /* 7.1 Optional delta-table creation hook (plugin B).
+         *
+         * Another extension can register a hook by including
+         * "iceberg_catalog_hook.h" and, in its _PG_init(), doing:
+         *
+         *   void **hook_ptr = find_rendezvous_variable(ICEBERG_CREATE_DELTA_TABLE_HOOK_VAR);
+         *   *hook_ptr = (void *) my_delta_table_hook;
+         *
+         * If a hook is registered, we invoke it here so it can create an
+         * internal openGauss table with the same schema.  Errors from the hook
+         * are wrapped with a clear "Create delta table failed" message.
+         */
+        {
+            void **hook_ptr = find_rendezvous_variable(ICEBERG_CREATE_DELTA_TABLE_HOOK_VAR);
+
+            if (hook_ptr != NULL && *hook_ptr != NULL) {
+                iceberg_create_delta_table_hook_type hook =
+                    (iceberg_create_delta_table_hook_type) *hook_ptr;
+
+                PG_TRY();
+                {
+                    hook(p_namespace, p_table_name, schema_json);
+                }
+                PG_CATCH();
+                {
+                    ErrorData *edata = CopyErrorData();
+                    char *original_message = edata->message == NULL
+                                                 ? pstrdup("unknown error")
+                                                 : pstrdup(edata->message);
+                    FreeErrorData(edata);
+                    FlushErrorState();
+
+                    iceberg_bridge_table_free(table);
+
+                    ereport(ERROR,
+                            (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+                             errmsg("Create delta table failed: %s", original_message)));
+                }
+                PG_END_TRY();
+            }
+        }
+
+        /* 7.2 Create Foreign Table via bridge.
+         *
+         * Executes CREATE FOREIGN TABLE through SPI.  iceberg_fdw's
+         * ProcessUtility hook intercepts the statement and handles both the
+         * DDL and the catalog metadata writes.
+         */
+        {
             PG_TRY();
             {
-                hook(p_namespace, p_table_name, schema_json);
+                ft_relid = iceberg_fdw_create_foreign_table(
+                    p_namespace, p_table_name, p_schema);
             }
             PG_CATCH();
             {
@@ -249,113 +309,94 @@ iceberg_create_table(PG_FUNCTION_ARGS)
                 FreeErrorData(edata);
                 FlushErrorState();
 
+                iceberg_bridge_table_free(table);
+
                 ereport(ERROR,
                         (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
-                         errmsg("Create delta table failed: %s", original_message)));
+                         errmsg("Create foreign table failed: %s", original_message)));
             }
             PG_END_TRY();
         }
+
+        /* 8. META InsertTable + Return JSON — single source of truth for
+         * catalog metadata.  UUID and metadata_location come from the SDK
+         * CreateTable result.  The OID comes from the foreign table created
+         * in section 7.2. */
+        {
+            /* Extract table metadata from SDK result. */
+            IcebergBridgeString *uuid_json        = NULL;
+            IcebergBridgeString *meta_json        = NULL;
+            IcebergBridgeString *loc_json         = NULL;
+
+            iceberg_bridge_table_uuid(table, &uuid_json, &error);
+            iceberg_bridge_table_metadata_json(table, &meta_json, &error);
+            iceberg_bridge_table_location(table, &loc_json, &error);
+
+            const char *table_uuid_str = iceberg_bridge_string_data(uuid_json);
+            const char *meta_str       = iceberg_bridge_string_data(meta_json);
+            const char *loc_str        = iceberg_bridge_string_data(loc_json);
+            char       *md_location    = psprintf("%s/metadata/00000-%s.metadata.json",
+                                                  loc_str, table_uuid_str);
+
+            if (!OidIsValid(ft_relid))
+                ereport(ERROR,
+                        (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+                         errmsg("create table: foreign table creation failed, no valid relid")));
+
+            char *partition_fields_json = p_partition_spec == NULL
+                ? NULL : jsonb_to_cstring(p_partition_spec);
+            MetaRegisterTableInput meta_input;
+
+            memset(&meta_input, 0, sizeof(meta_input));
+            meta_input.table_info.relid = ft_relid;
+            meta_input.table_info.namespace_name = p_namespace;
+            meta_input.table_info.table_name = p_table_name;
+            meta_input.table_info.table_uuid = pstrdup(table_uuid_str);
+            meta_input.table_info.metadata_location = md_location;
+            meta_input.table_info.previous_metadata_location = NULL;
+            meta_input.table_info.table_location = table_location_str;
+            meta_input.table_info.last_column_id = temporary_last_column_id(schema_json);
+            meta_input.table_info.current_schema_id = 0;
+            meta_input.table_info.has_current_schema_id = true;
+            meta_input.table_info.has_current_snapshot_id = false;
+            meta_input.table_info.default_spec_id = 0;
+            meta_input.table_info.has_default_spec_id = true;
+            meta_input.schema_json = schema_json;
+            meta_input.partition_fields_json = partition_fields_json;
+            meta_input.schema_id = 0;
+            meta_input.spec_id = 0;
+
+            PG_TRY();
+            {
+                iceberg_meta_register_table(p_namespace, p_table_name, &meta_input);
+            }
+            PG_CATCH();
+            {
+                ErrorData *edata = CopyErrorData();
+                iceberg_bridge_string_free(uuid_json);
+                iceberg_bridge_string_free(meta_json);
+                iceberg_bridge_string_free(loc_json);
+                iceberg_bridge_table_free(table);
+                iceberg_err_rethrow_metadata(edata, "create table metadata registration");
+            }
+            PG_END_TRY();
+
+            /* 9. Return LoadTableResult JSON */
+            StringInfoData resp_buf;
+            initStringInfo(&resp_buf);
+            appendStringInfo(&resp_buf,
+                "{\"metadata-location\":\"%s\",\"metadata\":%s,\"config\":{}}",
+                md_location, meta_str);
+
+            iceberg_bridge_string_free(uuid_json);
+            iceberg_bridge_string_free(meta_json);
+            iceberg_bridge_string_free(loc_json);
+            iceberg_bridge_table_free(table);
+
+            PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
+                CStringGetDatum(resp_buf.data)));
+        }
     }
-
-    /* 7.2 Create Foreign Table via bridge.
-     *
-     * Executes CREATE FOREIGN TABLE through SPI.  iceberg_fdw's
-     * ProcessUtility hook intercepts the statement and handles both the
-     * DDL and the catalog metadata writes.  When successful section 8
-     * is skipped because iceberg_fdw already wrote the metadata.
-     */
-    {
-
-        PG_TRY();
-        {
-            ft_relid = iceberg_fdw_create_foreign_table(
-                p_namespace, p_table_name, p_schema);
-        }
-        PG_CATCH();
-        {
-            ErrorData *edata = CopyErrorData();
-            char *original_message = edata->message == NULL
-                                         ? pstrdup("unknown error")
-                                         : pstrdup(edata->message);
-            FreeErrorData(edata);
-            FlushErrorState();
-
-            ereport(ERROR,
-                    (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
-                     errmsg("Create foreign table failed: %s", original_message)));
-        }
-        PG_END_TRY();
-    }
-
-    /* 8. META InsertTable — single source of truth for catalog metadata.
-     * Uses the real OID from fdw when available, falls back to a
-     * temporary counter when no foreign table was created. */
-    {
-        /*
-         * TODO: Replace the temporary uuid / metadata_location values with
-         * the SDK CreateTable result once wired.
-         */
-        static Oid next_temporary_relid = 800000;
-        static unsigned int next_temporary_uuid = 1;
-        char *schema_json = jsonb_to_cstring(p_schema);
-        char *partition_fields_json = p_partition_spec == NULL ? NULL : jsonb_to_cstring(p_partition_spec);
-        char *metadata_location = psprintf("file:///tmp/iceberg_catalog/%s/%s/metadata/v1.metadata.json",
-                                           p_namespace, p_table_name);
-        char *table_location = p_location == NULL
-                                   ? psprintf("file:///tmp/iceberg_catalog/%s/%s", p_namespace, p_table_name)
-                                   : p_location;
-        char *table_uuid = psprintf("00000000-0000-0000-0000-%012u", next_temporary_uuid++);
-        MetaRegisterTableInput meta_input;
-
-        memset(&meta_input, 0, sizeof(meta_input));
-        meta_input.table_info.relid = OidIsValid(ft_relid) ? ft_relid : next_temporary_relid++;
-        meta_input.table_info.namespace_name = p_namespace;
-        meta_input.table_info.table_name = p_table_name;
-        meta_input.table_info.table_uuid = table_uuid;
-        meta_input.table_info.metadata_location = metadata_location;
-        meta_input.table_info.previous_metadata_location = NULL;
-        meta_input.table_info.table_location = table_location;
-        meta_input.table_info.last_column_id = temporary_last_column_id(schema_json);
-        meta_input.table_info.current_schema_id = 0;
-        meta_input.table_info.has_current_schema_id = true;
-        meta_input.table_info.has_current_snapshot_id = false;
-        meta_input.table_info.default_spec_id = 0;
-        meta_input.table_info.has_default_spec_id = true;
-        meta_input.schema_json = schema_json;
-        meta_input.partition_fields_json = partition_fields_json;
-        meta_input.schema_id = 0;
-        meta_input.spec_id = 0;
-
-        PG_TRY();
-        {
-            iceberg_meta_register_table(p_namespace, p_table_name, &meta_input);
-        }
-        PG_CATCH();
-        {
-            ErrorData *edata = CopyErrorData();
-            iceberg_err_rethrow_metadata(edata, "create table metadata registration");
-        }
-        PG_END_TRY();
-    }
-
-    /* 9. TODO: Construct and return JSONB response */
-
-    /* TODO:
-     * StringInfo buf = makeStringInfo();
-     * appendStringInfo(buf,
-     *     "{\"metadata-location\":\"%s\",\"metadata\":{...},\"config\":{...}}",
-     *     result.metadata_location);
-     * Jsonb *ret = ...;
-     * PG_RETURN_JSONB_P(ret);
-     */
-
-    /* 10. Return minimal JSONB response (TODO: replace with real data from SDK/META) */
-
-    /* TODO: Build response from IcebergTable returned by catalog->CreateTable()
-     * once SDK & META modules are available. */
-
-    PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
-        CStringGetDatum("{\"metadata-location\": \"TODO\", \"metadata\": {}, \"config\": {}}")));
 }
 
 
