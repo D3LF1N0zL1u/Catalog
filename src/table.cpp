@@ -22,6 +22,7 @@
 
 #include "errors.h"
 #include "iceberg_catalog.h"
+#include "iceberg_catalog_hook.h"
 #include "metadata.h"
 #include "table.h"
 
@@ -208,10 +209,53 @@ iceberg_create_table(PG_FUNCTION_ARGS)
      *                   "Failed to create table via SDK");
      */
 
-    /* 7. TODO: DDL CreateStorage */
+    /* 7. DDL CreateStorage */
+
+    /* 7.1 Optional delta-table creation hook (plugin B).
+     *
+     * Another extension can register a hook by including
+     * "iceberg_catalog_hook.h" and, in its _PG_init(), doing:
+     *
+     *   void **hook_ptr = find_rendezvous_variable(ICEBERG_CREATE_DELTA_TABLE_HOOK_VAR);
+     *   *hook_ptr = (void *) my_delta_table_hook;
+     *
+     * If a hook is registered, we invoke it here so it can create an
+     * internal openGauss table with the same schema.  Errors from the hook
+     * are wrapped with a clear "Create delta table failed" message.
+     */
+    {
+        char *schema_json = jsonb_to_cstring(p_schema);
+        void **hook_ptr = find_rendezvous_variable(ICEBERG_CREATE_DELTA_TABLE_HOOK_VAR);
+
+        if (hook_ptr != NULL && *hook_ptr != NULL) {
+            iceberg_create_delta_table_hook_type hook =
+                (iceberg_create_delta_table_hook_type) *hook_ptr;
+
+            PG_TRY();
+            {
+                hook(p_namespace, p_table_name, schema_json);
+            }
+            PG_CATCH();
+            {
+                ErrorData *edata = CopyErrorData();
+                char *original_message = edata->message == NULL
+                                             ? pstrdup("unknown error")
+                                             : pstrdup(edata->message);
+                FreeErrorData(edata);
+                FlushErrorState();
+
+                ereport(ERROR,
+                        (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+                         errmsg("Create delta table failed: %s", original_message)));
+            }
+            PG_END_TRY();
+        }
+    }
+
+    /* 7.2 TODO: Create Foreign Table */
 
     /* TODO:
-     * iceberg_ddl_CreateStorage(p_namespace, p_table_name, result);
+     * iceberg_ddl_CreateForeignTable(p_namespace, p_table_name, result);
      */
 
     /* 8. META InsertTable */
@@ -595,10 +639,52 @@ iceberg_drop_table(PG_FUNCTION_ARGS)
                 (errcode(ERRCODE_ICEBERG_NOT_SUPPORTED),
                  errmsg("p_purge is not yet supported")));
 
-    /* 4. TODO: DDL DropStorage */
+    /* 4. DDL DropStorage */
+
+    /* 4.1 Optional delta-table drop hook (plugin B).
+     *
+     * Another extension can register a hook by including
+     * "iceberg_catalog_hook.h" and, in its _PG_init(), doing:
+     *
+     *   void **hook_ptr = find_rendezvous_variable(ICEBERG_DROP_DELTA_TABLE_HOOK_VAR);
+     *   *hook_ptr = (void *) my_delta_table_drop_hook;
+     *
+     * If a hook is registered, we invoke it here so it can drop the internal
+     * openGauss table that was created alongside this Iceberg table.  Errors
+     * from the hook are wrapped with a clear "Drop delta table failed" message.
+     */
+    {
+        void **hook_ptr = find_rendezvous_variable(ICEBERG_DROP_DELTA_TABLE_HOOK_VAR);
+
+        if (hook_ptr != NULL && *hook_ptr != NULL) {
+            iceberg_drop_delta_table_hook_type hook =
+                (iceberg_drop_delta_table_hook_type) *hook_ptr;
+
+            PG_TRY();
+            {
+                hook(p_namespace, p_table, p_purge);
+            }
+            PG_CATCH();
+            {
+                ErrorData *edata = CopyErrorData();
+                char *original_message = edata->message == NULL
+                                             ? pstrdup("unknown error")
+                                             : pstrdup(edata->message);
+                FreeErrorData(edata);
+                FlushErrorState();
+
+                ereport(ERROR,
+                        (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+                         errmsg("Drop delta table failed: %s", original_message)));
+            }
+            PG_END_TRY();
+        }
+    }
+
+    /* 4.2 TODO: Drop Foreign Table */
 
     /* TODO:
-     * iceberg_ddl_DropStorage(p_namespace, p_table);
+     * iceberg_ddl_DropForeignTable(p_namespace, p_table);
      */
 
     /* 5. META DeleteTable (cascade handles related rows) */
@@ -1012,26 +1098,24 @@ iceberg_list_tables(PG_FUNCTION_ARGS)
                 (errcode(ERRCODE_ICEBERG_INVALID_PARAM),
                  errmsg("p_page_size must be >= 1")));
 
-    /* 3. TODO: Check namespace exists via META */
+    /* 3. List tables via META (namespace existence check is internal) */
 
-    /* TODO:
-     * if (!iceberg_meta_namespace_exists(p_namespace))
-     *     ereport(ERROR,
-     *             (errcode(ERRCODE_ICEBERG_NOT_FOUND),
-     *              errmsg("The given namespace does not exist")));
-     */
+    {
+        char *json_result = NULL;
 
-    /* 4. TODO: List tables via META */
+        PG_TRY();
+        {
+            json_result = iceberg_meta_list_tables(p_namespace, p_page_size, p_page_token);
+        }
+        PG_CATCH();
+        {
+            ErrorData *edata = CopyErrorData();
+            iceberg_err_rethrow_metadata(edata, "list tables");
+        }
+        PG_END_TRY();
 
-    /* TODO:
-     * char *result = iceberg_meta_list_tables(p_namespace, p_page_size, p_page_token);
-     * PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
-     *     CStringGetDatum(result)));
-     * pfree(result);
-     */
-
-    /* 5. Return stub (TODO: replace with real META call) */
-
-    PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
-        CStringGetDatum("{\"identifiers\": [], \"next-page-token\": null}")));
+        PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
+            CStringGetDatum(json_result)));
+        pfree(json_result);
+    }
 }

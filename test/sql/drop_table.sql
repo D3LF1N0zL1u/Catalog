@@ -101,4 +101,13 @@ SAVEPOINT sp9;
 SELECT iceberg_catalog.drop_table('drop_ns', 'drop_tbl');
 ROLLBACK TO SAVEPOINT sp9;
 
+-- 10. 创建后立即删除（覆盖 hook 插入点的正常路径）
+SELECT iceberg_catalog.create_table(
+    'drop_ns',
+    'drop_immediate_tbl',
+    '{"type":"struct","fields":[]}'::JSONB
+);
+
+SELECT iceberg_catalog.drop_table('drop_ns', 'drop_immediate_tbl') AS drop_immediate_result;
+
 ROLLBACK;

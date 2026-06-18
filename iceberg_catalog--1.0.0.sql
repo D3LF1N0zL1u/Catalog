@@ -163,6 +163,32 @@ CREATE OR REPLACE FUNCTION iceberg_catalog.create_namespace(
 LANGUAGE C VOLATILE
 AS 'iceberg_catalog', 'iceberg_create_namespace';
 
+CREATE OR REPLACE FUNCTION iceberg_catalog.is_namespace_existed(
+    p_namespace TEXT
+) RETURNS JSONB
+LANGUAGE C STABLE
+AS 'iceberg_catalog', 'iceberg_is_namespace_existed';
+
+CREATE OR REPLACE FUNCTION iceberg_catalog.drop_namespace(
+    p_namespace TEXT
+) RETURNS JSONB
+LANGUAGE C VOLATILE
+AS 'iceberg_catalog', 'iceberg_drop_namespace';
+
+CREATE OR REPLACE FUNCTION iceberg_catalog.load_namespace(
+    p_namespace TEXT
+) RETURNS JSONB
+LANGUAGE C STABLE
+AS 'iceberg_catalog', 'iceberg_load_namespace';
+
+CREATE OR REPLACE FUNCTION iceberg_catalog.list_namespaces(
+    p_parent     TEXT    DEFAULT NULL,
+    p_page_size  INTEGER DEFAULT 1000,
+    p_page_token TEXT    DEFAULT NULL
+) RETURNS JSONB
+LANGUAGE C STABLE
+AS 'iceberg_catalog', 'iceberg_list_namespaces';
+
 CREATE OR REPLACE FUNCTION iceberg_catalog.create_table(
     p_namespace    TEXT,
     p_table_name   TEXT,
@@ -231,5 +257,5 @@ CREATE OR REPLACE FUNCTION iceberg_catalog.list_tables(
     p_page_size  INTEGER DEFAULT 1000,
     p_page_token TEXT    DEFAULT NULL
 ) RETURNS JSONB
-LANGUAGE C STABLE
+LANGUAGE C VOLATILE
 AS 'iceberg_catalog', 'iceberg_list_tables';
