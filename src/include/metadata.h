@@ -140,4 +140,92 @@ void iceberg_meta_free_table_info(MetaTableInfo *info);
 void iceberg_meta_create_namespace(const char *namespace_name,
                                     const char *properties_json);
 
+/*
+ * MetaCommitTableInput -- input for iceberg_meta_commit_table().
+ *
+ * Carries the metadata changes produced by the SDK CommitTable operation:
+ * a new metadata pointer and an optional snapshot summary row.
+ */
+typedef struct MetaCommitTableInput {
+    const char *namespace_name;
+    const char *table_name;
+    const char *table_uuid;
+    const char *old_metadata_location;
+    const char *new_metadata_location;
+    int64_t     new_snapshot_id;
+    int         snapshot_schema_id;
+    bool        has_snapshot_schema_id;
+    int64_t     snapshot_timestamp_ms;
+    const char *manifest_list;
+    int64_t     total_records;
+    bool        has_total_records;
+} MetaCommitTableInput;
+
+/*
+ * MetaCommitSchemaChangeInput -- input for iceberg_meta_commit_schema_change().
+ *
+ * Carries the metadata changes produced by the SDK AddColumn operation:
+ * a new metadata pointer, a new schema id, and the schema definition JSON.
+ */
+typedef struct MetaCommitSchemaChangeInput {
+    const char *namespace_name;
+    const char *table_name;
+    const char *table_uuid;
+    const char *old_metadata_location;
+    const char *new_metadata_location;
+    int         new_schema_id;
+    const char *schema_json;
+    int         new_last_column_id;
+} MetaCommitSchemaChangeInput;
+
+/*
+ * Lock a table row for write-path operations (SELECT ... FOR UPDATE).
+ * Returns a palloc'd MetaTableInfo; caller must free via iceberg_meta_free_table_info.
+ * Returns NULL if the table does not exist.
+ * Internal function; does not manage SPI.
+ */
+MetaTableInfo* iceberg_meta_get_table_for_update(const char *namespace_name,
+                                                  const char *table_name);
+
+/*
+ * Lock a table row for write-path operations (service wrapper).
+ * Connects SPI, acquires a FOR UPDATE lock, and returns the table metadata.
+ * Raises UNDEFINED_OBJECT if the table does not exist.
+ */
+MetaTableInfo* iceberg_meta_lock_table(const char *namespace_name,
+                                        const char *table_name);
+
+/*
+ * Update table metadata pointers and optional summary fields with optimistic locking.
+ * Uses CAS: WHERE metadata_location = old AND table_uuid check.
+ * Internal function; does not manage SPI.
+ */
+void iceberg_meta_update_table(const char *ns, const char *tbl, const char *uuid,
+                                const char *old_meta, const char *new_meta,
+                                int64_t new_snap_id, bool has_new_snap,
+                                int new_schema_id, bool has_new_schema,
+                                int new_last_col_id, bool has_new_last_col,
+                                int new_def_spec_id, bool has_new_def_spec);
+
+/*
+ * Insert a snapshot summary row into iceberg_catalog.snapshots.
+ * Internal function; does not manage SPI.
+ */
+void iceberg_meta_insert_snapshot(const char *table_uuid, int64_t snapshot_id,
+                                   int schema_id, bool has_schema_id,
+                                   int64_t timestamp_ms, const char *manifest_list,
+                                   int64_t total_records, bool has_total_records);
+
+/*
+ * Scene-level commit: update table pointer + insert snapshot cache.
+ * This is the primary entry-point for commit_table.
+ */
+void iceberg_meta_commit_table(const MetaCommitTableInput *input);
+
+/*
+ * Scene-level schema change commit: update table pointer + insert schema cache.
+ * This is the primary entry-point for add_column.
+ */
+void iceberg_meta_commit_schema_change(const MetaCommitSchemaChangeInput *input);
+
 #endif /* ICEBERG_CATALOG_METADATA_H */
