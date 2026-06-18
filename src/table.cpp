@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "fdw_util.h"
 #include "errors.h"
 #include "iceberg_catalog.h"
 #include "iceberg_catalog_hook.h"
@@ -209,6 +210,10 @@ iceberg_create_table(PG_FUNCTION_ARGS)
      *                   "Failed to create table via SDK");
      */
 
+    /* ft_relid is set by the bridge in section 7.2; section 8 is
+     * skipped when the bridge succeeds (iceberg_fdw wrote metadata). */
+    Oid ft_relid = InvalidOid;
+
     /* 7. DDL CreateStorage */
 
     /* 7.1 Optional delta-table creation hook (plugin B).
@@ -252,18 +257,43 @@ iceberg_create_table(PG_FUNCTION_ARGS)
         }
     }
 
-    /* 7.2 TODO: Create Foreign Table */
-
-    /* TODO:
-     * iceberg_ddl_CreateForeignTable(p_namespace, p_table_name, result);
+    /* 7.2 Create Foreign Table via bridge.
+     *
+     * Executes CREATE FOREIGN TABLE through SPI.  iceberg_fdw's
+     * ProcessUtility hook intercepts the statement and handles both the
+     * DDL and the catalog metadata writes.  When successful section 8
+     * is skipped because iceberg_fdw already wrote the metadata.
      */
+    {
 
-    /* 8. META InsertTable */
+        PG_TRY();
+        {
+            ft_relid = iceberg_fdw_create_foreign_table(
+                p_namespace, p_table_name, p_schema);
+        }
+        PG_CATCH();
+        {
+            ErrorData *edata = CopyErrorData();
+            char *original_message = edata->message == NULL
+                                         ? pstrdup("unknown error")
+                                         : pstrdup(edata->message);
+            FreeErrorData(edata);
+            FlushErrorState();
 
+            ereport(ERROR,
+                    (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+                     errmsg("Create foreign table failed: %s", original_message)));
+        }
+        PG_END_TRY();
+    }
+
+    /* 8. META InsertTable — single source of truth for catalog metadata.
+     * Uses the real OID from fdw when available, falls back to a
+     * temporary counter when no foreign table was created. */
     {
         /*
-         * TODO: Replace these temporary values with the SDK CreateTable result
-         * and the DDL CreateStorage relation OID once those modules are wired.
+         * TODO: Replace the temporary uuid / metadata_location values with
+         * the SDK CreateTable result once wired.
          */
         static Oid next_temporary_relid = 800000;
         static unsigned int next_temporary_uuid = 1;
@@ -278,7 +308,7 @@ iceberg_create_table(PG_FUNCTION_ARGS)
         MetaRegisterTableInput meta_input;
 
         memset(&meta_input, 0, sizeof(meta_input));
-        meta_input.table_info.relid = next_temporary_relid++;
+        meta_input.table_info.relid = OidIsValid(ft_relid) ? ft_relid : next_temporary_relid++;
         meta_input.table_info.namespace_name = p_namespace;
         meta_input.table_info.table_name = p_table_name;
         meta_input.table_info.table_uuid = table_uuid;
