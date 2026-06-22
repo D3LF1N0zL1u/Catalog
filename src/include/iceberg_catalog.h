@@ -41,4 +41,8 @@
 #define ERRCODE_ICEBERG_NOT_SUPPORTED     MAKE_SQLSTATE('P','0','0','0','8')  /* 501 Not Implemented */
 #define ERRCODE_ICEBERG_INTERNAL_ERROR    MAKE_SQLSTATE('P','0','0','0','9')  /* 500 Internal Error */
 
+#include "iceberg_bridge.h"
+
+IcebergBridgeStorage *open_iceberg_storage(void);
+
 #endif /* ICEBERG_CATALOG_H */
