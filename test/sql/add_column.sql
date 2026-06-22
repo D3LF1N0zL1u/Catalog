@@ -6,6 +6,12 @@
 
 BEGIN;
 
+SELECT iceberg_catalog.create_namespace('test_ns', '{}'::jsonb);
+SELECT iceberg_catalog.create_table(
+    'test_ns', 'test_tbl',
+    '{"type":"struct","fields":[{"id":1,"name":"id","type":"long","required":true}]}'::jsonb
+);
+
 -- 1. 基础调用：传入 4 个必填参数，返回合法 JSONB
 SELECT jsonb_typeof(iceberg_catalog.add_column(
     'test_ns',

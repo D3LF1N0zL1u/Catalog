@@ -6,13 +6,12 @@
 
 BEGIN;
 
--- TODO: Replace direct metadata table setup with create_namespace once exposed.
-INSERT INTO iceberg_catalog.namespaces(catalog_name, namespace, properties)
-VALUES
-    (current_database(), 'test_ns', '{}'::JSONB),
-    (current_database(), 'ns_full', '{}'::JSONB),
-    (current_database(), 'ns_stage', '{}'::JSONB),
-    (current_database(), 'ns_props', '{}'::JSONB);
+-- Setup: create namespaces via create_namespace (also creates openGauss schemas
+-- needed by iceberg_fdw for foreign table creation).
+SELECT iceberg_catalog.create_namespace('test_ns', '{}'::jsonb);
+SELECT iceberg_catalog.create_namespace('ns_full', '{}'::jsonb);
+SELECT iceberg_catalog.create_namespace('ns_stage', '{}'::jsonb);
+SELECT iceberg_catalog.create_namespace('ns_props', '{}'::jsonb);
 
 -- 1. 基础调用：仅填 3 个必填参数，返回合法 JSONB
 SELECT jsonb_typeof(iceberg_catalog.create_table(
@@ -26,7 +25,7 @@ WITH result AS (
     SELECT iceberg_catalog.create_table(
         'test_ns',
         'test_tbl_keys',
-        '{"type":"struct","fields":[]}'::JSONB
+        '{"type":"struct","fields":[{"id":1,"name":"id","type":"long","required":true}]}'::JSONB
     ) AS value
 )
 SELECT value ? 'metadata-location' AS has_metadata_location,
@@ -39,7 +38,7 @@ SELECT iceberg_catalog.create_table(
     'ns_full',
     'tbl_full',
     '{"type":"struct","fields":[{"id":1,"name":"col1","type":"string","required":false}]}'::JSONB,
-    's3://bucket/path/to/table'::TEXT,
+    'file:///tmp/custom-location/ns_full/tbl_full'::TEXT,
     '{"spec-id":0,"fields":[]}'::JSONB,
     '{"order-id":0,"fields":[]}'::JSONB,
     FALSE,
@@ -50,7 +49,7 @@ SELECT iceberg_catalog.create_table(
 SELECT count(*) = 1 AS has_table_head,
        bool_and(metadata_location IS NOT NULL AND length(metadata_location) > 0) AS has_metadata_location,
        bool_and(previous_metadata_location IS NULL) AS previous_metadata_location_is_null,
-       bool_and(table_location = 's3://bucket/path/to/table') AS table_location_matches,
+       bool_and(table_location = 'file:///tmp/custom-location/ns_full/tbl_full') AS table_location_matches,
        bool_and(last_column_id = 1) AS last_column_id_matches,
        bool_and(current_schema_id = 0) AS current_schema_id_matches,
        bool_and(default_spec_id = 0) AS default_spec_id_matches
@@ -86,7 +85,7 @@ WHERE t.namespace = 'ns_full'
 SELECT iceberg_catalog.create_table(
     'ns_stage',
     'tbl_stage',
-    '{"type":"struct","fields":[]}'::JSONB,
+    '{"type":"struct","fields":[{"id":1,"name":"id","type":"long","required":true}]}'::JSONB,
     p_stage_create => TRUE
 );
 
@@ -109,7 +108,7 @@ ROLLBACK TO SAVEPOINT sp7;
 SELECT iceberg_catalog.create_table(
     'ns_props',
     'tbl_props',
-    '{"type":"struct","fields":[]}'::JSONB,
+    '{"type":"struct","fields":[{"id":1,"name":"id","type":"long","required":true}]}'::JSONB,
     p_properties => '{}'::JSONB
 );
 

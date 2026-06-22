@@ -20,3 +20,8 @@ include $(PGXS)
 # objects and causes relocation failures at link time.  Override to -fPIC.
 override CXXFLAGS := $(filter-out -fPIE,$(CXXFLAGS)) -fPIC
 override CPPFLAGS := $(filter-out -fPIE,$(CPPFLAGS))
+
+test:
+	bash test/run_tests.sh
+
+.PHONY: test

@@ -4,13 +4,10 @@
 
 BEGIN;
 
--- TODO: 暴露 create_namespace 后，替换这里直接写 namespaces 的前置数据。
-INSERT INTO iceberg_catalog.namespaces(catalog_name, namespace, properties)
-VALUES
-    (current_database(), 'rename_src_ns', '{}'::jsonb),
-    (current_database(), 'rename_dst_ns', '{}'::jsonb),
-    (current_database(), 'rename_same_ns', '{}'::jsonb),
-    (current_database(), 'rename_conflict_ns', '{}'::jsonb);
+SELECT iceberg_catalog.create_namespace('rename_src_ns', '{}'::jsonb);
+SELECT iceberg_catalog.create_namespace('rename_dst_ns', '{}'::jsonb);
+SELECT iceberg_catalog.create_namespace('rename_same_ns', '{}'::jsonb);
+SELECT iceberg_catalog.create_namespace('rename_conflict_ns', '{}'::jsonb);
 
 SELECT iceberg_catalog.create_table(
     'rename_src_ns',
@@ -22,13 +19,13 @@ SELECT iceberg_catalog.create_table(
 SELECT iceberg_catalog.create_table(
     'rename_same_ns',
     'old_name',
-    '{"type":"struct","fields":[]}'::JSONB
+    '{"type":"struct","fields":[{"id":1,"name":"id","type":"long","required":true}]}'::JSONB
 );
 
 SELECT iceberg_catalog.create_table(
     'rename_src_ns',
     'type_check_tbl',
-    '{"type":"struct","fields":[]}'::JSONB
+    '{"type":"struct","fields":[{"id":1,"name":"id","type":"long","required":true}]}'::JSONB
 );
 
 SELECT iceberg_catalog.create_table(

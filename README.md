@@ -21,6 +21,14 @@ Makefile 会自动链接 `-L$(srcdir)/deps -liceberg_rust_bridge`。
 GAUSS_SRC=/path/to/openGauss-server make clean && GAUSS_SRC=/path/to/openGauss-server make
 ```
 
+## 测试
+
+确保数据库已启动（需要 `ICEBERG_WAREHOUSE=file:///tmp/iceberg_warehouse`）：
+
+```bash
+make test
+```
+
 ## 环境变量
 
 ### 必需
