@@ -338,3 +338,72 @@ iceberg_fdw_drop_foreign_table(const char *p_namespace,
 
     return InvalidOid;
 }
+
+/*
+ * Rename a foreign table via SPI.
+ *
+ * If src_ns == dst_ns:
+ *   ALTER FOREIGN TABLE ns.old_name RENAME TO new_name
+ * Otherwise:
+ *   ALTER FOREIGN TABLE src_ns.old_name SET SCHEMA dst_ns
+ *   plus RENAME TO if dst_name differs from src_name
+ *
+ * Returns InvalidOid when iceberg_fdw is not installed.
+ */
+Oid
+iceberg_fdw_rename_foreign_table(const char *p_src_ns,
+                                  const char *p_src_table,
+                                  const char *p_dst_ns,
+                                  const char *p_dst_table)
+{
+    Oid server_oid;
+
+    server_oid = find_or_create_iceberg_fdw_server();
+    if (!OidIsValid(server_oid))
+        return InvalidOid;
+
+    connect_spi();
+
+    PG_TRY();
+    {
+        if (strcmp(p_src_ns, p_dst_ns) == 0)
+        {
+            char *sql = psprintf(
+                "ALTER FOREIGN TABLE %s.%s RENAME TO %s",
+                quote_identifier(p_src_ns), quote_identifier(p_src_table),
+                quote_identifier(p_dst_table));
+            SPI_execute(sql, false, 0);
+            pfree(sql);
+        }
+        else
+        {
+            /* Use src_table name as temp name in dst schema */
+            char *sql1 = psprintf(
+                "ALTER FOREIGN TABLE %s.%s SET SCHEMA %s",
+                quote_identifier(p_src_ns), quote_identifier(p_src_table),
+                quote_identifier(p_dst_ns));
+            SPI_execute(sql1, false, 0);
+            pfree(sql1);
+
+            if (strcmp(p_src_table, p_dst_table) != 0)
+            {
+                char *sql2 = psprintf(
+                    "ALTER FOREIGN TABLE %s.%s RENAME TO %s",
+                    quote_identifier(p_dst_ns), quote_identifier(p_src_table),
+                    quote_identifier(p_dst_table));
+                SPI_execute(sql2, false, 0);
+                pfree(sql2);
+            }
+        }
+
+        finish_spi();
+    }
+    PG_CATCH();
+    {
+        finish_spi();
+        PG_RE_THROW();
+    }
+    PG_END_TRY();
+
+    return InvalidOid;
+}

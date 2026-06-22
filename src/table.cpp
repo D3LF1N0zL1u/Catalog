@@ -636,6 +636,23 @@ iceberg_rename_table(PG_FUNCTION_ARGS)
     }
     PG_END_TRY();
 
+    /* 4.1 Rename Foreign Table */
+    {
+        PG_TRY();
+        {
+            iceberg_fdw_rename_foreign_table(p_src_ns, p_src_table, p_dst_ns, p_dst_table);
+        }
+        PG_CATCH();
+        {
+            ErrorData *edata = CopyErrorData();
+            char *msg = edata->message ? pstrdup(edata->message) : pstrdup("unknown error");
+            FreeErrorData(edata); FlushErrorState();
+            ereport(ERROR, (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+                    errmsg("Rename foreign table failed: %s", msg)));
+        }
+        PG_END_TRY();
+    }
+
     /* 4. NOTE: SDK RenameTable is not needed.
      *
      * The design doc reserves catalog->RenameTable() for implementations that

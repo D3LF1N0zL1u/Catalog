@@ -44,6 +44,16 @@ extern Oid iceberg_fdw_drop_foreign_table(
     const char *p_namespace,
     const char *p_table_name);
 
+/*
+ * Rename a foreign table via SPI.  Handles cross-schema renames.
+ * Returns InvalidOid when iceberg_fdw is not installed.
+ */
+extern Oid iceberg_fdw_rename_foreign_table(
+    const char *p_src_ns,
+    const char *p_src_table,
+    const char *p_dst_ns,
+    const char *p_dst_table);
+
 #ifdef __cplusplus
 }
 #endif
