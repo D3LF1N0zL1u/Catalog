@@ -20,6 +20,12 @@ SELECT jsonb_typeof(iceberg_catalog.create_table(
     '{"type":"struct","fields":[{"id":1,"name":"id","type":"long","required":true},{"id":2,"name":"data","type":"string","required":false}]}'::JSONB
 )) AS result_type;
 
+-- 1.1 验证外表已创建
+SELECT count(*) = 1 AS foreign_table_created
+FROM pg_class c
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'test_ns' AND c.relname = 'test_tbl_basic' AND c.relkind = 'f';
+
 -- 2. 返回结构包含三个顶层 key
 WITH result AS (
     SELECT iceberg_catalog.create_table(
@@ -111,5 +117,11 @@ SELECT iceberg_catalog.create_table(
     '{"type":"struct","fields":[{"id":1,"name":"id","type":"long","required":true}]}'::JSONB,
     p_properties => '{}'::JSONB
 );
+
+-- 9. 验证最后一个外表也存在
+SELECT count(*) = 1 AS foreign_table_exists
+FROM pg_class c
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'ns_props' AND c.relname = 'tbl_props' AND c.relkind = 'f';
 
 ROLLBACK;

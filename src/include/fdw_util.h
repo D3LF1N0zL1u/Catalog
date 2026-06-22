@@ -36,6 +36,14 @@ extern Oid iceberg_fdw_create_foreign_table(
     const char *p_table_name,
     Jsonb *schema);
 
+/*
+ * Drop the foreign table for an Iceberg table via SPI.
+ * Returns InvalidOid when iceberg_fdw is not installed.
+ */
+extern Oid iceberg_fdw_drop_foreign_table(
+    const char *p_namespace,
+    const char *p_table_name);
+
 #ifdef __cplusplus
 }
 #endif

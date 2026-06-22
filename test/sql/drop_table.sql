@@ -59,6 +59,12 @@ WHERE table_uuid = (
     SELECT table_uuid FROM drop_table_test_ids WHERE label = 'basic'
 );
 
+-- 2.1 验证外表已删除
+SELECT count(*) = 0 AS foreign_table_dropped
+FROM pg_class c
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'drop_ns' AND c.relname = 'drop_tbl' AND c.relkind = 'f';
+
 -- 3. p_purge = FALSE（显式传入）
 SELECT iceberg_catalog.drop_table('drop_false_ns', 'drop_false_tbl', FALSE) AS drop_false_result;
 
@@ -106,5 +112,11 @@ SELECT iceberg_catalog.create_table(
 );
 
 SELECT iceberg_catalog.drop_table('drop_ns', 'drop_immediate_tbl') AS drop_immediate_result;
+
+-- 10.1 验证外表已删除
+SELECT count(*) = 0 AS immediate_drop_fdw_removed
+FROM pg_class c
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'drop_ns' AND c.relname = 'drop_immediate_tbl' AND c.relkind = 'f';
 
 ROLLBACK;
