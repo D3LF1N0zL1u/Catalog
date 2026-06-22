@@ -99,8 +99,7 @@ SELECT jsonb_array_length(
     (iceberg_catalog.list_tables('lt_empty_ns'))->'identifiers'
 ) = 0 AS t4_empty_identifiers;
 
-SELECT (iceberg_catalog.list_tables('lt_empty_ns'))->>'next-page-token' IS NULL
-    OR (iceberg_catalog.list_tables('lt_empty_ns'))->>'next-page-token' = 'null'
+SELECT ((iceberg_catalog.list_tables('lt_empty_ns'))->>'next-page-token') IS NULL
     AS t4_null_next_token;
 
 -- ============================================================================
@@ -111,8 +110,7 @@ SELECT jsonb_array_length(
     (iceberg_catalog.list_tables('lt_page_ns', 2))->'identifiers'
 ) = 2 AS t5_page1_count;
 
-SELECT (iceberg_catalog.list_tables('lt_page_ns', 2))->>'next-page-token' IS NOT NULL
-    AND (iceberg_catalog.list_tables('lt_page_ns', 2))->>'next-page-token' <> 'null'
+SELECT ((iceberg_catalog.list_tables('lt_page_ns', 2))->>'next-page-token') IS NOT NULL
     AS t5_page1_has_token;
 
 -- ============================================================================
@@ -136,8 +134,7 @@ SELECT
     jsonb_array_length(
         (iceberg_catalog.list_tables('lt_page_ns', 100))->'identifiers'
     ) = 5 AS t7_all_count,
-    ((iceberg_catalog.list_tables('lt_page_ns', 100))->>'next-page-token' IS NULL
-     OR (iceberg_catalog.list_tables('lt_page_ns', 100))->>'next-page-token' = 'null')
+    ((iceberg_catalog.list_tables('lt_page_ns', 100))->>'next-page-token') IS NULL
     AS t7_no_next_token;
 
 -- ============================================================================

@@ -1538,6 +1538,10 @@ iceberg_meta_list_tables(const char *namespace_name,
                 (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
                  errmsg("failed to decode page_token")));
 
+    /* Allocate result in caller context before SPI connect, so it
+     * survives SPI_finish(). */
+    initStringInfo(&result);
+
     PG_TRY();
     {
         connect_spi();
@@ -1586,8 +1590,6 @@ iceberg_meta_list_tables(const char *namespace_name,
 
             total = (int) SPI_processed;
         }
-
-        initStringInfo(&result);
 
         appendStringInfoString(&result, "{\"identifiers\":[");
         for (i = 0; i < total && i < page_size; i++)

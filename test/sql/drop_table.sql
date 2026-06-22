@@ -4,11 +4,8 @@
 
 BEGIN;
 
--- TODO: 暴露 create_namespace 后，替换这里直接写 namespaces 的前置数据。
-INSERT INTO iceberg_catalog.namespaces(catalog_name, namespace, properties)
-VALUES
-    (current_database(), 'drop_ns', '{}'::JSONB),
-    (current_database(), 'drop_false_ns', '{}'::JSONB);
+SELECT iceberg_catalog.create_namespace('drop_ns', '{}'::jsonb);
+SELECT iceberg_catalog.create_namespace('drop_false_ns', '{}'::jsonb);
 
 CREATE TEMP TABLE drop_table_test_ids(
     label TEXT PRIMARY KEY,
@@ -31,7 +28,7 @@ WHERE namespace = 'drop_ns'
 SELECT iceberg_catalog.create_table(
     'drop_false_ns',
     'drop_false_tbl',
-    '{"type":"struct","fields":[]}'::JSONB
+    '{"type":"struct","fields":[{"id":1,"name":"id","type":"long","required":true}]}'::JSONB
 );
 
 INSERT INTO drop_table_test_ids(label, table_uuid)
@@ -105,7 +102,7 @@ ROLLBACK TO SAVEPOINT sp9;
 SELECT iceberg_catalog.create_table(
     'drop_ns',
     'drop_immediate_tbl',
-    '{"type":"struct","fields":[]}'::JSONB
+    '{"type":"struct","fields":[{"id":1,"name":"id","type":"long","required":true}]}'::JSONB
 );
 
 SELECT iceberg_catalog.drop_table('drop_ns', 'drop_immediate_tbl') AS drop_immediate_result;

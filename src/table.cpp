@@ -1080,13 +1080,18 @@ iceberg_add_column(PG_FUNCTION_ARGS)
          * TODO: Replace this temporary schema JSON with the real schema from
          * the SDK AddColumn result once wired up.
          */
-        char *new_schema_json = psprintf(
-            "{\"type\":\"struct\",\"fields\":["
-            "{\"id\":%d,\"name\":\"%s\",\"required\":false,\"type\":\"%s\""
-            "%s%s\"}]}",
-            new_last_column_id, p_column_name, p_column_type,
-            p_column_doc != NULL ? ",\"doc\":\"" : "",
-            p_column_doc != NULL ? p_column_doc : "");
+        char *new_schema_json;
+        if (p_column_doc != NULL)
+            new_schema_json = psprintf(
+                "{\"type\":\"struct\",\"fields\":["
+                "{\"id\":%d,\"name\":\"%s\",\"required\":false,\"type\":\"%s\","
+                "\"doc\":\"%s\"}]}",
+                new_last_column_id, p_column_name, p_column_type, p_column_doc);
+        else
+            new_schema_json = psprintf(
+                "{\"type\":\"struct\",\"fields\":["
+                "{\"id\":%d,\"name\":\"%s\",\"required\":false,\"type\":\"%s\"}]}",
+                new_last_column_id, p_column_name, p_column_type);
 
         MetaCommitSchemaChangeInput meta_input;
 

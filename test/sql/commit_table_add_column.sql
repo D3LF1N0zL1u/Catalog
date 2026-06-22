@@ -5,8 +5,7 @@
 BEGIN;
 
 -- ### Setup: use SQL functions to create namespace and table ###
-INSERT INTO iceberg_catalog.namespaces(catalog_name, namespace, properties)
-VALUES (current_database()::text, 'cmt_test', '{}'::jsonb);
+SELECT iceberg_catalog.create_namespace('cmt_test', '{}'::jsonb);
 
 SELECT iceberg_catalog.create_table(
     'cmt_test', 't1',
@@ -29,7 +28,7 @@ FROM iceberg_catalog.snapshots s, _t1_uuid u
 WHERE s.table_uuid = u.table_uuid;
 
 -- 执行 commit_table
-SELECT iceberg_commit_table('cmt_test', 't1',
+SELECT iceberg_catalog.commit_table('cmt_test', 't1',
     '[]'::jsonb,
     '[{"action":"add-snapshot","snapshot":{"snapshot-id":100,"timestamp-ms":999000,"manifest-list":"s3://m","summary":{"operation":"append"},"schema-id":0}}]'::jsonb
 ) AS cmt_result;
@@ -59,7 +58,7 @@ FROM iceberg_catalog.tables_internal
 WHERE namespace = 'cmt_test' AND table_name = 't1';
 
 -- 执行 add_column
-SELECT iceberg_add_column('cmt_test', 't1', 'col3', 'string', 'third column') AS add_result;
+SELECT iceberg_catalog.add_column('cmt_test', 't1', 'col3', 'string', 'third column') AS add_result;
 
 -- 验证: schema 字段增加到 3 个
 SELECT count(*) = 3 AS t2_schema_after
@@ -76,19 +75,19 @@ WHERE namespace = 'cmt_test' AND table_name = 't1';
 -- ============================================================================
 
 SAVEPOINT sp1;
-SELECT iceberg_commit_table('', 't', '[]'::jsonb, '[]'::jsonb);
+SELECT iceberg_catalog.commit_table('', 't', '[]'::jsonb, '[]'::jsonb);
 ROLLBACK TO SAVEPOINT sp1;
 
 SAVEPOINT sp2;
-SELECT iceberg_commit_table('n', '', '[]'::jsonb, '[]'::jsonb);
+SELECT iceberg_catalog.commit_table('n', '', '[]'::jsonb, '[]'::jsonb);
 ROLLBACK TO SAVEPOINT sp2;
 
 SAVEPOINT sp3;
-SELECT iceberg_add_column('', 't', 'c', 'string');
+SELECT iceberg_catalog.add_column('', 't', 'c', 'string');
 ROLLBACK TO SAVEPOINT sp3;
 
 SAVEPOINT sp4;
-SELECT iceberg_add_column('n', 't', '', 'string');
+SELECT iceberg_catalog.add_column('n', 't', '', 'string');
 ROLLBACK TO SAVEPOINT sp4;
 
 -- ============================================================================
@@ -96,11 +95,11 @@ ROLLBACK TO SAVEPOINT sp4;
 -- ============================================================================
 
 SAVEPOINT sp5;
-SELECT iceberg_commit_table('cmt_test', 'no_such_table', '[]'::jsonb, '[]'::jsonb);
+SELECT iceberg_catalog.commit_table('cmt_test', 'no_such_table', '[]'::jsonb, '[]'::jsonb);
 ROLLBACK TO SAVEPOINT sp5;
 
 SAVEPOINT sp6;
-SELECT iceberg_add_column('cmt_test', 'no_such_table', 'col', 'string');
+SELECT iceberg_catalog.add_column('cmt_test', 'no_such_table', 'col', 'string');
 ROLLBACK TO SAVEPOINT sp6;
 
 -- ============================================================================
