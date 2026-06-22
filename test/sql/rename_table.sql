@@ -43,6 +43,14 @@ SELECT iceberg_catalog.rename_table(
     'rename_dst_tbl'
 ) AS rename_result;
 
+-- 1.1 验证外表已迁移
+SELECT count(*) = 0 AS old_table_gone
+FROM pg_class c JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'rename_src_ns' AND c.relname = 'rename_src_tbl' AND c.relkind = 'f';
+SELECT count(*) = 1 AS new_table_exists
+FROM pg_class c JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'rename_dst_ns' AND c.relname = 'rename_dst_tbl' AND c.relkind = 'f';
+
 -- 2. 同 Namespace 内重命名
 SELECT iceberg_catalog.rename_table(
     'rename_same_ns',
@@ -50,6 +58,14 @@ SELECT iceberg_catalog.rename_table(
     'rename_same_ns',
     'new_name'
 ) AS same_namespace_result;
+
+-- 2.1 验证同 namespace 重命名后外表已更新
+SELECT count(*) = 0 AS old_name_gone
+FROM pg_class c JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'rename_same_ns' AND c.relname = 'old_name' AND c.relkind = 'f';
+SELECT count(*) = 1 AS new_name_exists
+FROM pg_class c JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'rename_same_ns' AND c.relname = 'new_name' AND c.relkind = 'f';
 
 -- 3. 验证返回 JSONB object
 SELECT jsonb_typeof(iceberg_catalog.rename_table(

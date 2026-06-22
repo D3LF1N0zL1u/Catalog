@@ -49,11 +49,42 @@ SELECT iceberg_catalog.add_column(
 -----------------------------------------------------------------------------------------------------------------
  {"metadata": {}, "metadata-location": "file:///tmp/iceberg_catalog/test_ns/test_tbl/metadata/v2.metadata.json"}
 (1 row)
+-- 3.1 验证外表已增加新列
+SELECT count(*) = 1 AS col_new_col_exists
+FROM pg_attribute a
+JOIN pg_class c ON a.attrelid = c.oid
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'test_ns' AND c.relname = 'test_tbl'
+  AND a.attname = 'new_col' AND a.attnum > 0 AND NOT a.attisdropped;
+ col_new_col_exists 
+--------------------
+ t
+(1 row)
+SELECT count(*) = 1 AS col_col_a_exists
+FROM pg_attribute a
+JOIN pg_class c ON a.attrelid = c.oid
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'test_ns' AND c.relname = 'test_tbl'
+  AND a.attname = 'col_a' AND a.attnum > 0 AND NOT a.attisdropped;
+ col_col_a_exists 
+------------------
+ t
+(1 row)
+SELECT count(*) = 1 AS col_col_with_doc_exists
+FROM pg_attribute a
+JOIN pg_class c ON a.attrelid = c.oid
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'test_ns' AND c.relname = 'test_tbl'
+  AND a.attname = 'col_with_doc' AND a.attnum > 0 AND NOT a.attisdropped;
+ col_col_with_doc_exists 
+-------------------------
+ t
+(1 row)
 -- 4. p_namespace 为空串 → 报错
 SAVEPOINT sp4;
 SAVEPOINT
 SELECT iceberg_catalog.add_column('', 'tbl', 'col', 'string');
-gsql:test/sql/add_column.sql:39: ERROR:  p_namespace is required and must not be empty
+gsql:test/sql/add_column.sql:59: ERROR:  p_namespace is required and must not be empty
 CONTEXT:  referenced column: add_column
 ROLLBACK TO SAVEPOINT sp4;
 ROLLBACK
@@ -61,7 +92,7 @@ ROLLBACK
 SAVEPOINT sp5;
 SAVEPOINT
 SELECT iceberg_catalog.add_column('ns', '', 'col', 'string');
-gsql:test/sql/add_column.sql:44: ERROR:  p_table is required and must not be empty
+gsql:test/sql/add_column.sql:64: ERROR:  p_table is required and must not be empty
 CONTEXT:  referenced column: add_column
 ROLLBACK TO SAVEPOINT sp5;
 ROLLBACK
@@ -69,7 +100,7 @@ ROLLBACK
 SAVEPOINT sp6;
 SAVEPOINT
 SELECT iceberg_catalog.add_column('ns', 'tbl', '', 'string');
-gsql:test/sql/add_column.sql:49: ERROR:  p_column_name is required and must not be empty
+gsql:test/sql/add_column.sql:69: ERROR:  p_column_name is required and must not be empty
 CONTEXT:  referenced column: add_column
 ROLLBACK TO SAVEPOINT sp6;
 ROLLBACK
@@ -77,7 +108,7 @@ ROLLBACK
 SAVEPOINT sp7;
 SAVEPOINT
 SELECT iceberg_catalog.add_column('ns', 'tbl', 'col', '');
-gsql:test/sql/add_column.sql:54: ERROR:  p_column_type is required and must not be empty
+gsql:test/sql/add_column.sql:74: ERROR:  p_column_type is required and must not be empty
 CONTEXT:  referenced column: add_column
 ROLLBACK TO SAVEPOINT sp7;
 ROLLBACK

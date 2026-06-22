@@ -72,6 +72,21 @@ SELECT iceberg_catalog.rename_table(
 -------------------
  {"success": true}
 (1 row)
+-- 1.1 验证外表已迁移
+SELECT count(*) = 0 AS old_table_gone
+FROM pg_class c JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'rename_src_ns' AND c.relname = 'rename_src_tbl' AND c.relkind = 'f';
+ old_table_gone 
+----------------
+ t
+(1 row)
+SELECT count(*) = 1 AS new_table_exists
+FROM pg_class c JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'rename_dst_ns' AND c.relname = 'rename_dst_tbl' AND c.relkind = 'f';
+ new_table_exists 
+------------------
+ t
+(1 row)
 -- 2. 同 Namespace 内重命名
 SELECT iceberg_catalog.rename_table(
     'rename_same_ns',
@@ -82,6 +97,21 @@ SELECT iceberg_catalog.rename_table(
  same_namespace_result 
 -----------------------
  {"success": true}
+(1 row)
+-- 2.1 验证同 namespace 重命名后外表已更新
+SELECT count(*) = 0 AS old_name_gone
+FROM pg_class c JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'rename_same_ns' AND c.relname = 'old_name' AND c.relkind = 'f';
+ old_name_gone 
+---------------
+ t
+(1 row)
+SELECT count(*) = 1 AS new_name_exists
+FROM pg_class c JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'rename_same_ns' AND c.relname = 'new_name' AND c.relkind = 'f';
+ new_name_exists 
+-----------------
+ t
 (1 row)
 -- 3. 验证返回 JSONB object
 SELECT jsonb_typeof(iceberg_catalog.rename_table(
@@ -98,7 +128,7 @@ SELECT jsonb_typeof(iceberg_catalog.rename_table(
 SAVEPOINT sp4;
 SAVEPOINT
 SELECT iceberg_catalog.rename_table('', 'rename_dst_tbl', 'rename_dst_ns', 'rename_dst_tbl_2');
-gsql:test/sql/rename_table.sql:64: ERROR:  p_src_ns is required and must not be empty
+gsql:test/sql/rename_table.sql:80: ERROR:  p_src_ns is required and must not be empty
 CONTEXT:  referenced column: rename_table
 ROLLBACK TO SAVEPOINT sp4;
 ROLLBACK
@@ -106,7 +136,7 @@ ROLLBACK
 SAVEPOINT sp5;
 SAVEPOINT
 SELECT iceberg_catalog.rename_table('rename_dst_ns', '', 'rename_dst_ns', 'rename_dst_tbl_2');
-gsql:test/sql/rename_table.sql:69: ERROR:  p_src_table is required and must not be empty
+gsql:test/sql/rename_table.sql:85: ERROR:  p_src_table is required and must not be empty
 CONTEXT:  referenced column: rename_table
 ROLLBACK TO SAVEPOINT sp5;
 ROLLBACK
@@ -114,7 +144,7 @@ ROLLBACK
 SAVEPOINT sp6;
 SAVEPOINT
 SELECT iceberg_catalog.rename_table('rename_dst_ns', 'rename_dst_tbl', '', 'rename_dst_tbl_2');
-gsql:test/sql/rename_table.sql:74: ERROR:  p_dst_ns is required and must not be empty
+gsql:test/sql/rename_table.sql:90: ERROR:  p_dst_ns is required and must not be empty
 CONTEXT:  referenced column: rename_table
 ROLLBACK TO SAVEPOINT sp6;
 ROLLBACK
@@ -122,7 +152,7 @@ ROLLBACK
 SAVEPOINT sp7;
 SAVEPOINT
 SELECT iceberg_catalog.rename_table('rename_dst_ns', 'rename_dst_tbl', 'rename_dst_ns', '');
-gsql:test/sql/rename_table.sql:79: ERROR:  p_dst_table is required and must not be empty
+gsql:test/sql/rename_table.sql:95: ERROR:  p_dst_table is required and must not be empty
 CONTEXT:  referenced column: rename_table
 ROLLBACK TO SAVEPOINT sp7;
 ROLLBACK
@@ -130,7 +160,7 @@ ROLLBACK
 SAVEPOINT sp8;
 SAVEPOINT
 SELECT iceberg_catalog.rename_table(NULL, 'rename_dst_tbl', 'rename_dst_ns', 'rename_dst_tbl_2');
-gsql:test/sql/rename_table.sql:84: ERROR:  p_src_ns is required and must not be empty
+gsql:test/sql/rename_table.sql:100: ERROR:  p_src_ns is required and must not be empty
 CONTEXT:  referenced column: rename_table
 ROLLBACK TO SAVEPOINT sp8;
 ROLLBACK
@@ -199,7 +229,7 @@ SELECT iceberg_catalog.rename_table(
     'rename_dst_ns',
     'rename_dst_tbl_2'
 );
-gsql:test/sql/rename_table.sql:135: ERROR:  rename table metadata: source table not found
+gsql:test/sql/rename_table.sql:151: ERROR:  rename table metadata: source table not found
 CONTEXT:  referenced column: rename_table
 ROLLBACK TO SAVEPOINT sp10;
 ROLLBACK
@@ -212,7 +242,7 @@ SELECT iceberg_catalog.rename_table(
     'rename_missing_ns',
     'rename_dst_tbl_2'
 );
-gsql:test/sql/rename_table.sql:145: ERROR:  rename table metadata: destination namespace not found
+gsql:test/sql/rename_table.sql:161: ERROR:  rename table metadata: destination namespace not found
 CONTEXT:  referenced column: rename_table
 ROLLBACK TO SAVEPOINT sp11;
 ROLLBACK
@@ -225,7 +255,7 @@ SELECT iceberg_catalog.rename_table(
     'rename_conflict_ns',
     'rename_conflict_tbl'
 );
-gsql:test/sql/rename_table.sql:155: ERROR:  rename table metadata: destination table already exists
+gsql:test/sql/rename_table.sql:171: ERROR:  rename table metadata: destination table already exists
 CONTEXT:  referenced column: rename_table
 ROLLBACK TO SAVEPOINT sp12;
 ROLLBACK

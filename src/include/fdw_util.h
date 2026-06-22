@@ -54,6 +54,21 @@ extern Oid iceberg_fdw_rename_foreign_table(
     const char *p_dst_ns,
     const char *p_dst_table);
 
+/*
+ * Map an Iceberg type string to an openGauss SQL type name.
+ */
+extern const char *iceberg_type_to_sql(const char *iceberg_type);
+
+/*
+ * Add a column to a foreign table via SPI.
+ * Returns InvalidOid when iceberg_fdw is not installed.
+ */
+extern Oid iceberg_fdw_add_column(
+    const char *p_namespace,
+    const char *p_table_name,
+    const char *p_column_name,
+    const char *p_column_type);
+
 #ifdef __cplusplus
 }
 #endif
