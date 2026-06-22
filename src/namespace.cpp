@@ -42,10 +42,7 @@ ddl_create_schema(const char *namespace_name)
     appendStringInfo(&sql, "CREATE SCHEMA %s",
                      quote_identifier(namespace_name));
 
-    if (SPI_connect() != SPI_OK_CONNECT)
-        ereport(ERROR,
-                (errcode(ERRCODE_INTERNAL_ERROR),
-                 errmsg("failed to connect to SPI for schema creation")));
+    connect_spi();
 
     rc = SPI_execute(sql.data, false, 0);
     if (rc != SPI_OK_UTILITY)
@@ -53,7 +50,7 @@ ddl_create_schema(const char *namespace_name)
                 (errcode(ERRCODE_INTERNAL_ERROR),
                  errmsg("failed to create schema \"%s\"", namespace_name)));
 
-    SPI_finish();
+    finish_spi();
     pfree(sql.data);
 }
 
@@ -71,10 +68,7 @@ ddl_drop_schema(const char *namespace_name)
     appendStringInfo(&sql, "DROP SCHEMA %s CASCADE",
                      quote_identifier(namespace_name));
 
-    if (SPI_connect() != SPI_OK_CONNECT)
-        ereport(ERROR,
-                (errcode(ERRCODE_INTERNAL_ERROR),
-                 errmsg("failed to connect to SPI for schema drop")));
+    connect_spi();
 
     rc = SPI_execute(sql.data, false, 0);
     if (rc != SPI_OK_UTILITY)
@@ -82,7 +76,7 @@ ddl_drop_schema(const char *namespace_name)
                 (errcode(ERRCODE_INTERNAL_ERROR),
                  errmsg("failed to drop schema \"%s\"", namespace_name)));
 
-    SPI_finish();
+    finish_spi();
     pfree(sql.data);
 }
 
