@@ -37,11 +37,11 @@ WHERE s.table_uuid = u.table_uuid;
 -- 执行 commit_table
 SELECT iceberg_catalog.commit_table('cmt_test', 't1',
     '[]'::jsonb,
-    '[{"action":"add-snapshot","snapshot":{"snapshot-id":100,"timestamp-ms":999000,"manifest-list":"s3://m","summary":{"operation":"append"},"schema-id":0}}]'::jsonb
+    '[{"action":"add-snapshot","snapshot":{"snapshot-id":100,"timestamp-ms":4782185701401,"manifest-list":"s3://m","summary":{"operation":"append"},"schema-id":0}}]'::jsonb
 ) AS cmt_result;
-                                                 cmt_result                                                 
-------------------------------------------------------------------------------------------------------------
- {"metadata": {}, "metadata-location": "file:///tmp/iceberg_catalog/cmt_test/t1/metadata/v2.metadata.json"}
+                                                                      cmt_result                                                                      
+------------------------------------------------------------------------------------------------------------------------------------------------------
+ {"metadata": {}, "metadata-location": "file:///tmp/iceberg_warehouse/cmt_test/t1/metadata/00001-<uuid>.metadata.json"}
 (1 row)
 -- 验证: metadata_location 已更新, previous 自动轮转
 SELECT t.metadata_location != u.metadata_location  AS t1_meta_updated,

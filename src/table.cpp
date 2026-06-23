@@ -326,17 +326,15 @@ iceberg_create_table(PG_FUNCTION_ARGS)
             /* Extract table metadata from SDK result. */
             IcebergBridgeString *uuid_json        = NULL;
             IcebergBridgeString *meta_json        = NULL;
-            IcebergBridgeString *loc_json         = NULL;
+            IcebergBridgeString *md_json          = NULL;
 
             iceberg_bridge_table_uuid(table, &uuid_json, &error);
             iceberg_bridge_table_metadata_json(table, &meta_json, &error);
-            iceberg_bridge_table_location(table, &loc_json, &error);
+            iceberg_bridge_table_metadata_location(table, &md_json, &error);
 
             const char *table_uuid_str = iceberg_bridge_string_data(uuid_json);
             const char *meta_str       = iceberg_bridge_string_data(meta_json);
-            const char *loc_str        = iceberg_bridge_string_data(loc_json);
-            char       *md_location    = psprintf("%s/metadata/00000-%s.metadata.json",
-                                                  loc_str, table_uuid_str);
+            char       *md_location    = pstrdup(iceberg_bridge_string_data(md_json));
 
             if (!OidIsValid(ft_relid))
                 ereport(ERROR,
@@ -375,7 +373,7 @@ iceberg_create_table(PG_FUNCTION_ARGS)
                 ErrorData *edata = CopyErrorData();
                 iceberg_bridge_string_free(uuid_json);
                 iceberg_bridge_string_free(meta_json);
-                iceberg_bridge_string_free(loc_json);
+                iceberg_bridge_string_free(md_json);
                 iceberg_bridge_table_free(table);
                 iceberg_err_rethrow_metadata(edata, "create table metadata registration");
             }
@@ -390,7 +388,7 @@ iceberg_create_table(PG_FUNCTION_ARGS)
 
             iceberg_bridge_string_free(uuid_json);
             iceberg_bridge_string_free(meta_json);
-            iceberg_bridge_string_free(loc_json);
+            iceberg_bridge_string_free(md_json);
             iceberg_bridge_table_free(table);
 
             PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
@@ -882,60 +880,49 @@ iceberg_commit_table(PG_FUNCTION_ARGS)
                 (errcode(ERRCODE_ICEBERG_INVALID_PARAM),
                  errmsg("p_updates is required and must not be NULL")));
 
-    /* 3. TODO: Validate p_updates elements have action = "add-snapshot" */
+    /* 3. SDK commit — storage-only, no catalog needed. */
 
-    /* TODO: Validate each element in p_updates has "action" = "add-snapshot" */
+    IcebergBridgeStorage *storage = open_iceberg_storage();
+    IcebergBridgeError   *bridge_err  = NULL;
+    IcebergBridgeStatus   status;
+    char                  *updates_str = NULL;
+    IcebergBridgeString   *out_location = NULL;
 
-    /* 4. TODO: META GetTableForUpdate */
+    MetaTableInfo *info = NULL;
 
-    /* TODO:
-     * info = META.GetTableForUpdate(p_namespace, p_table);
-     * if (info == NULL)
-     *     ereport(ERROR, (errcode(ERRCODE_ICEBERG_NOT_FOUND),
-     *                     errmsg("table not found")));
-     */
-
-    /* 5. TODO: SDK LoadTable */
-
-    /* TODO:
-     * error_msg = NULL;
-     * table = catalog->LoadTable(p_namespace, p_table, info->metadata_location, &error_msg);
-     * if (error_msg != NULL)
-     *     ereport(ERROR, (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
-     *                     errmsg("{\"type\":\"ServiceUnavailable\",\"message\":\"%s\",\"stack\":[]}", error_msg)));
-     */
-
-    /* 6. TODO: SDK CommitTable (apply requirements + updates + write S3) */
-
-    /* TODO:
-     * newMdlLocation = table->CommitTable(jsonb_to_cstring(p_requirements),
-     *                                      jsonb_to_cstring(p_updates), &error_msg);
-     * if (error_msg != NULL)
-     *     ereport(ERROR, (errcode(ERRCODE_ICEBERG_CONFLICT),
-     *                     errmsg("{\"type\":\"CommitFailedException\",\"message\":\"%s\",\"stack\":[]}", error_msg)));
-     */
-
-    /* 7. META commit_table (update table pointer + insert snapshot row) */
-
-    /*
-     * TODO: Replace these temporary values with the SDK CommitTable result
-     * once the SDK modules are wired up.
-     */
+    PG_TRY();
     {
-        MetaTableInfo *info = NULL;
-        static int64_t next_snapshot_id = 1;
+        info = iceberg_meta_lock_table(p_namespace, p_table);
+    }
+    PG_CATCH();
+    {
+        iceberg_bridge_storage_release(storage);
+        ErrorData *edata = CopyErrorData();
+        iceberg_err_rethrow_metadata(edata, "commit table metadata lock");
+    }
+    PG_END_TRY();
 
-        PG_TRY();
-        {
-            info = iceberg_meta_lock_table(p_namespace, p_table);
-        }
-        PG_CATCH();
-        {
-            ErrorData *edata = CopyErrorData();
-            iceberg_err_rethrow_metadata(edata, "commit table metadata lock");
-        }
-        PG_END_TRY();
+    PG_TRY();
+    {
+        updates_str = jsonb_to_cstring(p_updates);
 
+        status = iceberg_bridge_table_commit(
+            storage, info->metadata_location, updates_str,
+            &out_location, &bridge_err);
+
+        if (status != ICEBERG_BRIDGE_OK) {
+            const char *msg = bridge_err
+                ? pstrdup(iceberg_bridge_error_message(bridge_err))
+                : "sdk commit failed";
+            iceberg_bridge_error_free(bridge_err);
+            ereport(ERROR,
+                    (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+                     errmsg("iceberg_commit_table: %s", msg)));
+        }
+
+        const char *new_location = iceberg_bridge_string_data(out_location);
+
+        /* 4. META commit_table — update table pointer + insert snapshot row. */
         MetaCommitTableInput meta_input;
 
         memset(&meta_input, 0, sizeof(meta_input));
@@ -943,9 +930,12 @@ iceberg_commit_table(PG_FUNCTION_ARGS)
         meta_input.table_name = p_table;
         meta_input.table_uuid = info->table_uuid;
         meta_input.old_metadata_location = info->metadata_location;
-        meta_input.new_metadata_location = psprintf("file:///tmp/iceberg_catalog/%s/%s/metadata/v2.metadata.json",
-                                                     p_namespace, p_table);
-        meta_input.new_snapshot_id = next_snapshot_id++;
+        meta_input.new_metadata_location = pstrdup(new_location);
+        /* Extract snapshot-id from updates JSON for META record. */
+        {
+            const char *key = strstr(updates_str, "\"snapshot-id\":");
+            meta_input.new_snapshot_id = key ? (int64_t)strtoll(key + 14, NULL, 10) : 0;
+        }
         meta_input.snapshot_schema_id = info->current_schema_id;
         meta_input.has_snapshot_schema_id = info->has_current_schema_id;
         meta_input.snapshot_timestamp_ms = 0;
@@ -960,6 +950,7 @@ iceberg_commit_table(PG_FUNCTION_ARGS)
         PG_CATCH();
         {
             iceberg_meta_free_table_info(info);
+            iceberg_bridge_string_free(out_location);
             ErrorData *edata = CopyErrorData();
             iceberg_err_rethrow_metadata(edata, "commit table metadata commit");
         }
@@ -967,12 +958,23 @@ iceberg_commit_table(PG_FUNCTION_ARGS)
 
         iceberg_meta_free_table_info(info);
 
+        iceberg_bridge_string_free(out_location);
+        iceberg_bridge_storage_release(storage);
+
         /* 8. Return response with the new metadata location */
 
         PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
             CStringGetDatum(psprintf("{\"metadata-location\": \"%s\", \"metadata\": {}}",
                                      meta_input.new_metadata_location))));
     }
+    PG_CATCH();
+    {
+        iceberg_bridge_string_free(out_location);
+        iceberg_bridge_storage_release(storage);
+        ErrorData *edata = CopyErrorData();
+        iceberg_err_rethrow_metadata(edata, "commit table sdk");
+    }
+    PG_END_TRY();
 }
 
 
