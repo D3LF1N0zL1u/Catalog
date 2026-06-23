@@ -4,6 +4,7 @@
 #include "fmgr.h"
 
 extern "C" Datum iceberg_create_namespace(PG_FUNCTION_ARGS);
+extern "C" Datum iceberg_update_namespace_properties(PG_FUNCTION_ARGS);
 extern "C" Datum iceberg_is_namespace_existed(PG_FUNCTION_ARGS);
 extern "C" Datum iceberg_drop_namespace(PG_FUNCTION_ARGS);
 extern "C" Datum iceberg_load_namespace(PG_FUNCTION_ARGS);
