@@ -397,39 +397,23 @@ commit_table(p_namespace TEXT, p_table TEXT,
              p_requirements JSONB, p_updates JSONB) → JSONB
 
 1. 任一参数为 NULL → ereport(P0001)
-2. 校验 p_updates 中每个 element.action 为 "add-snapshot" → 否则 P0001
 
-3. info = META.GetTableForUpdate(p_namespace, p_table)
+2. // ★ storage-only SDK commit（无需 catalog 句柄）
+   storage = open_iceberg_storage()
+   info    = META.LockTable(p_namespace, p_table) // FOR UPDATE 行锁
    if info == NULL → ereport(P0004, "table not found")
 
-4. // ★ SDK 加载表对象
-   error_msg = NULL
-   table = catalog->LoadTable(p_namespace, p_table, info->metadata_location, &error_msg)
-   SDK_CHECK(table, error_msg, "ServiceUnavailable")
+   new_location = SDK.table_commit(storage, info->metadata_location,
+                                    jsonb_to_cstring(p_updates))
+   // SDK 内部：读 metadata.json → 应用 updates → 写新 metadata.json → 返回路径
+   // storage-only，不依赖 catalog，不校验 requirements（META 锁提供串行化）
 
-5. // ★ SDK 应用 requirements + updates + 写 S3（三步合一）
-   req_str  = jsonb_to_cstring(p_requirements)
-   upd_str  = jsonb_to_cstring(p_updates)
-   error_msg = NULL
-   newMdlLocation = table->CommitTable(req_str, upd_str, &error_msg)
-   SDK_CHECK(newMdlLocation, error_msg, "CommitFailedException")
-   // CommitTable 内部：应用 requirements → 追加 snapshot → 写新 metadata JSON 到 S3
+3. META.UpdateTable(p_namespace, p_table,
+                     info.metadata_location, // 乐观锁
+                     new_location,
+                     ...)
 
-6. // 先写元信息表（乐观锁）
-   newSnapshotId = get_snapshot_id_from(p_updates)
-   META.UpdateTable(p_namespace, p_table,
-                     info.metadata_location,    // old → 乐观锁
-                     newMdlLocation,
-                     newSnapshotId,
-                     table->GetCurrentSchemaId(),
-                     table->GetLastColumnId())
-
-7. metadata_json = table->GetMetadataJson()
-   delete table
-   return {
-       "metadata-location": newMdlLocation,
-       "metadata":          json_parse(metadata_json)
-     }
+4. return {"metadata-location": new_location, "metadata": {}}
 ```
 
 ### 7.14 add_column

@@ -34,6 +34,7 @@ normalize() {
         s/"last-updated-ms": [0-9]+/"last-updated-ms": <ts>/g
         s/iceberg_test/<test_db>/g
 	        s#gsql:[^ ]+test/sql/#gsql:test/sql/#g
+	        s/before last updated timestamp [0-9]+/before last updated timestamp <ts>/g
     '
 }
 
