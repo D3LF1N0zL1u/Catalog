@@ -62,17 +62,6 @@ temporary_last_column_id(const char *schema_json)
     return max_id;
 }
 
-static Datum
-load_table_result_jsonb(const char *metadata_location)
-{
-    StringInfo buf = makeStringInfo();
-
-    appendStringInfoString(buf, "{\"metadata-location\":");
-    escape_json(buf, metadata_location);
-    appendStringInfoString(buf, ",\"metadata\":{},\"config\":{}}");
-
-    return DirectFunctionCall1(jsonb_in, CStringGetDatum(buf->data));
-}
 
 
 /* ---- create_table ---- */
@@ -524,38 +513,55 @@ iceberg_load_table(PG_FUNCTION_ARGS)
                 (errcode(ERRCODE_ICEBERG_NOT_FOUND),
                  errmsg("The given table does not exist")));
 
-    /* 4. TODO: Load table via SDK */
+    /* 4. Load table via SDK to get real metadata. */
 
-    /* TODO:
-     * char *error_msg = NULL;
-     * IcebergTable *table = catalog->LoadTable(p_namespace, p_table,
-     *     info->metadata_location, &error_msg);
-     * if (error_msg != NULL)
-     *     ereport(ERROR,
-     *             (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
-     *              errmsg("%s", error_msg)));
-     */
-
-    /* 5. TODO: Construct and return LoadTableResult JSONB */
-
-    /* TODO:
-     * const char *metadata_json = table->GetMetadataJson();
-     * StringInfo buf = makeStringInfo();
-     * appendStringInfo(buf,
-     *     "{\"metadata-location\":\"%s\",\"metadata\":%s,\"config\":{}}",
-     *     info->metadata_location, metadata_json);
-     * delete table;
-     * PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
-     *     CStringGetDatum(buf->data)));
-     */
-
-    /* 6. Return META-backed LoadTableResult shell until SDK loading is wired. */
+    IcebergBridgeStorage *storage = open_iceberg_storage();
+    IcebergBridgeError   *bridge_err = NULL;
+    IcebergBridgeTable   *table      = NULL;
 
     {
-        Datum result = load_table_result_jsonb(info->metadata_location);
+        const char *levels[] = {p_namespace};
+        IcebergBridgeNamespaceIdent ns = {levels, 1};
+        IcebergBridgeTableIdent ident = {ns, p_table};
 
+        IcebergBridgeStatus status = iceberg_bridge_table_load(
+            storage, info->metadata_location, &ident, &table, &bridge_err);
+
+        if (status != ICEBERG_BRIDGE_OK) {
+            const char *msg = bridge_err
+                ? pstrdup(iceberg_bridge_error_message(bridge_err))
+                : "load table failed";
+            iceberg_bridge_error_free(bridge_err);
+            ereport(ERROR,
+                    (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+                     errmsg("iceberg_load_table: %s", msg)));
+        }
+    }
+
+    /* 5. Extract metadata JSON from loaded table. */
+
+    IcebergBridgeString *meta_str = NULL;
+    iceberg_bridge_table_metadata_json(table, &meta_str, &bridge_err);
+
+    const char *metadata_json = meta_str
+        ? iceberg_bridge_string_data(meta_str) : "{}";
+
+    /* 6. Build and return LoadTableResult JSON. */
+
+    {
+        StringInfoData buf;
+        initStringInfo(&buf);
+        appendStringInfo(&buf,
+            "{\"metadata-location\":\"%s\",\"metadata\":%s,\"config\":{}}",
+            info->metadata_location, metadata_json);
+
+        iceberg_bridge_string_free(meta_str);
+        iceberg_bridge_table_free(table);
+        iceberg_bridge_storage_release(storage);
         iceberg_meta_free_table_info(info);
-        PG_RETURN_DATUM(result);
+
+        PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
+            CStringGetDatum(buf.data)));
     }
 }
 
