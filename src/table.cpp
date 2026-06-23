@@ -752,11 +752,22 @@ iceberg_drop_table(PG_FUNCTION_ARGS)
         }
     }
 
-    /* 4.2 TODO: Drop Foreign Table */
-
-    /* TODO:
-     * iceberg_ddl_DropForeignTable(p_namespace, p_table);
-     */
+    /* 4.2 Drop Foreign Table */
+    {
+        PG_TRY();
+        {
+            iceberg_fdw_drop_foreign_table(p_namespace, p_table);
+        }
+        PG_CATCH();
+        {
+            ErrorData *edata = CopyErrorData();
+            char *msg = edata->message ? pstrdup(edata->message) : pstrdup("unknown error");
+            FreeErrorData(edata); FlushErrorState();
+            ereport(ERROR, (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+                    errmsg("Drop foreign table failed: %s", msg)));
+        }
+        PG_END_TRY();
+    }
 
     /* 5. META DeleteTable (cascade handles related rows) */
 

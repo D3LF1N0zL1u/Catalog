@@ -37,6 +37,15 @@ SELECT jsonb_typeof(iceberg_catalog.create_table(
 -------------
  object
 (1 row)
+-- 1.1 验证外表已创建
+SELECT count(*) = 1 AS foreign_table_created
+FROM pg_class c
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'test_ns' AND c.relname = 'test_tbl_basic' AND c.relkind = 'f';
+ foreign_table_created 
+-----------------------
+ t
+(1 row)
 -- 2. 返回结构包含三个顶层 key
 WITH result AS (
     SELECT iceberg_catalog.create_table(
@@ -128,7 +137,7 @@ SELECT iceberg_catalog.create_table(
 SAVEPOINT sp5;
 SAVEPOINT
 SELECT iceberg_catalog.create_table('', 'tbl', '{"type":"struct","fields":[]}'::JSONB);
-gsql:test/sql/create_table.sql:94: ERROR:  p_namespace is required and must not be empty
+gsql:test/sql/create_table.sql:100: ERROR:  p_namespace is required and must not be empty
 CONTEXT:  referenced column: create_table
 ROLLBACK TO SAVEPOINT sp5;
 ROLLBACK
@@ -136,7 +145,7 @@ ROLLBACK
 SAVEPOINT sp6;
 SAVEPOINT
 SELECT iceberg_catalog.create_table('test_ns', '', '{"type":"struct","fields":[]}'::JSONB);
-gsql:test/sql/create_table.sql:99: ERROR:  p_table_name is required and must not be empty
+gsql:test/sql/create_table.sql:105: ERROR:  p_table_name is required and must not be empty
 CONTEXT:  referenced column: create_table
 ROLLBACK TO SAVEPOINT sp6;
 ROLLBACK
@@ -144,7 +153,7 @@ ROLLBACK
 SAVEPOINT sp7;
 SAVEPOINT
 SELECT iceberg_catalog.create_table('test_ns', 'tbl_null_schema', NULL::JSONB);
-gsql:test/sql/create_table.sql:104: ERROR:  p_schema is required and must not be NULL
+gsql:test/sql/create_table.sql:110: ERROR:  p_schema is required and must not be NULL
 CONTEXT:  referenced column: create_table
 ROLLBACK TO SAVEPOINT sp7;
 ROLLBACK
@@ -158,6 +167,15 @@ SELECT iceberg_catalog.create_table(
                                                                                                                                                                                                                                                                                                                                                                   create_table                                                                                                                                                                                                                                                                                                                                                                   
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  {"config": {}, "metadata": {"refs": {}, "schemas": [{"type": "struct", "fields": [{"id": 1, "name": "id", "type": "long", "required": true}], "schema-id": 0}], "location": "file:///tmp/iceberg_warehouse/ns_props/tbl_props", "table-uuid": "<uuid>", "sort-orders": [{"fields": [], "order-id": 0}], "format-version": 2, "last-column-id": 1, "default-spec-id": 0, "last-updated-ms": <ts>, "partition-specs": [{"fields": [], "spec-id": 0}], "current-schema-id": 0, "last-partition-id": 999, "last-sequence-number": 0, "default-sort-order-id": 0}, "metadata-location": "file:///tmp/iceberg_warehouse/ns_props/tbl_props/metadata/00000-<uuid>.metadata.json"}
+(1 row)
+-- 9. 验证最后一个外表也存在
+SELECT count(*) = 1 AS foreign_table_exists
+FROM pg_class c
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'ns_props' AND c.relname = 'tbl_props' AND c.relkind = 'f';
+ foreign_table_exists 
+----------------------
+ t
 (1 row)
 ROLLBACK;
 ROLLBACK

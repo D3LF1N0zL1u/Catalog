@@ -84,6 +84,15 @@ WHERE table_uuid = (
 ------------------------
  t
 (1 row)
+-- 2.1 验证外表已删除
+SELECT count(*) = 0 AS foreign_table_dropped
+FROM pg_class c
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'drop_ns' AND c.relname = 'drop_tbl' AND c.relkind = 'f';
+ foreign_table_dropped 
+-----------------------
+ t
+(1 row)
 -- 3. p_purge = FALSE（显式传入）
 SELECT iceberg_catalog.drop_table('drop_false_ns', 'drop_false_tbl', FALSE) AS drop_false_result;
  drop_false_result 
@@ -103,7 +112,7 @@ WHERE table_uuid = (
 SAVEPOINT sp4;
 SAVEPOINT
 SELECT iceberg_catalog.drop_table('ns', 'tbl', TRUE);
-gsql:test/sql/drop_table.sql:73: ERROR:  p_purge is not yet supported
+gsql:test/sql/drop_table.sql:79: ERROR:  p_purge is not yet supported
 CONTEXT:  referenced column: drop_table
 ROLLBACK TO SAVEPOINT sp4;
 ROLLBACK
@@ -111,7 +120,7 @@ ROLLBACK
 SAVEPOINT sp5;
 SAVEPOINT
 SELECT iceberg_catalog.drop_table('', 'tbl');
-gsql:test/sql/drop_table.sql:78: ERROR:  p_namespace is required and must not be empty
+gsql:test/sql/drop_table.sql:84: ERROR:  p_namespace is required and must not be empty
 CONTEXT:  referenced column: drop_table
 ROLLBACK TO SAVEPOINT sp5;
 ROLLBACK
@@ -119,7 +128,7 @@ ROLLBACK
 SAVEPOINT sp6;
 SAVEPOINT
 SELECT iceberg_catalog.drop_table('ns', '');
-gsql:test/sql/drop_table.sql:83: ERROR:  p_table is required and must not be empty
+gsql:test/sql/drop_table.sql:89: ERROR:  p_table is required and must not be empty
 CONTEXT:  referenced column: drop_table
 ROLLBACK TO SAVEPOINT sp6;
 ROLLBACK
@@ -127,7 +136,7 @@ ROLLBACK
 SAVEPOINT sp7;
 SAVEPOINT
 SELECT iceberg_catalog.drop_table(NULL, 'tbl');
-gsql:test/sql/drop_table.sql:88: ERROR:  p_namespace is required and must not be empty
+gsql:test/sql/drop_table.sql:94: ERROR:  p_namespace is required and must not be empty
 CONTEXT:  referenced column: drop_table
 ROLLBACK TO SAVEPOINT sp7;
 ROLLBACK
@@ -135,7 +144,7 @@ ROLLBACK
 SAVEPOINT sp8;
 SAVEPOINT
 SELECT iceberg_catalog.drop_table('ns', NULL);
-gsql:test/sql/drop_table.sql:93: ERROR:  p_table is required and must not be empty
+gsql:test/sql/drop_table.sql:99: ERROR:  p_table is required and must not be empty
 CONTEXT:  referenced column: drop_table
 ROLLBACK TO SAVEPOINT sp8;
 ROLLBACK
@@ -143,7 +152,7 @@ ROLLBACK
 SAVEPOINT sp9;
 SAVEPOINT
 SELECT iceberg_catalog.drop_table('drop_ns', 'drop_tbl');
-gsql:test/sql/drop_table.sql:98: ERROR:  drop table metadata delete: table not found
+gsql:test/sql/drop_table.sql:104: ERROR:  Drop foreign table failed: failed to finish SPI
 CONTEXT:  referenced column: drop_table
 ROLLBACK TO SAVEPOINT sp9;
 ROLLBACK
@@ -161,6 +170,15 @@ SELECT iceberg_catalog.drop_table('drop_ns', 'drop_immediate_tbl') AS drop_immed
  drop_immediate_result 
 -----------------------
  {"success": true}
+(1 row)
+-- 10.1 验证外表已删除
+SELECT count(*) = 0 AS immediate_drop_fdw_removed
+FROM pg_class c
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'drop_ns' AND c.relname = 'drop_immediate_tbl' AND c.relkind = 'f';
+ immediate_drop_fdw_removed 
+----------------------------
+ t
 (1 row)
 ROLLBACK;
 ROLLBACK

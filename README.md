@@ -4,8 +4,26 @@ Iceberg catalog extension for openGauss.
 
 ## 依赖
 
-- **[iceberg_fdw](https://github.com/DataInfraLab/iceberg_fdw)**：外表创建和扫描，需在数据库中执行 `CREATE EXTENSION iceberg_fdw`
-- **[Rust bridge SDK](https://github.com/DataInfraLab/iceberg-rust-bridge)**：`deps/` 目录需包含：
+- **[iceberg_fdw](https://github.com/DataInfraLab/iceberg_fdw)**：openGauss FDW 扩展，负责 Iceberg 外表创建和全表扫描。
+
+  ```bash
+  git clone https://github.com/DataInfraLab/iceberg_fdw.git
+  cd iceberg_fdw
+  make && make install
+  gsql -c "CREATE EXTENSION iceberg_fdw;"
+  ```
+
+- **[Rust bridge SDK](https://github.com/DataInfraLab/iceberg-rust-bridge)**：Iceberg REST catalog 和文件 IO 的 C ABI 实现。
+
+  ```bash
+  git clone https://github.com/DataInfraLab/iceberg-rust-bridge.git
+  cd iceberg-rust-bridge
+  cargo build --release
+  cp target/release/libiceberg_rust_bridge.so /path/to/Catalog/deps/
+  cp include/iceberg_bridge.h /path/to/Catalog/deps/
+  ```
+
+  本仓库下新建 `deps/` 目录，并包含编译产物：
 
 ```
 deps/
@@ -18,7 +36,7 @@ Makefile 会自动链接 `-L$(srcdir)/deps -liceberg_rust_bridge`。
 ## 编译
 
 ```bash
-GAUSS_SRC=/path/to/openGauss-server make clean && GAUSS_SRC=/path/to/openGauss-server make
+GAUSS_SRC=/path/to/openGauss-server make && make install
 ```
 
 ## 测试

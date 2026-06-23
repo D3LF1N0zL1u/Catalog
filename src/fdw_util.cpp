@@ -302,3 +302,39 @@ iceberg_fdw_create_foreign_table(const char *p_namespace,
 
     return relid;
 }
+
+/*
+ * Drop the foreign table created for an Iceberg table.
+ * Returns InvalidOid if iceberg_fdw is not installed, otherwise
+ * ereport(ERROR)s on failure.
+ */
+Oid
+iceberg_fdw_drop_foreign_table(const char *p_namespace,
+                                const char *p_table_name)
+{
+    Oid server_oid;
+
+    server_oid = find_or_create_iceberg_fdw_server();
+    if (!OidIsValid(server_oid))
+        return InvalidOid;
+
+    connect_spi();
+
+    PG_TRY();
+    {
+        char *sql = psprintf("DROP FOREIGN TABLE %s.%s",
+                             quote_identifier(p_namespace),
+                             quote_identifier(p_table_name));
+        SPI_execute(sql, false, 0);
+        pfree(sql);
+        finish_spi();
+    }
+    PG_CATCH();
+    {
+        finish_spi();
+        PG_RE_THROW();
+    }
+    PG_END_TRY();
+
+    return InvalidOid;
+}
