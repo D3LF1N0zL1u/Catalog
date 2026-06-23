@@ -24,6 +24,18 @@
 #include "namespace.h"
 
 
+static bool
+jsonb_string_equals(const JsonbValue *left, const JsonbValue *right)
+{
+    return left->type == jbvString &&
+           right->type == jbvString &&
+           left->string.len == right->string.len &&
+           memcmp(left->string.val,
+                  right->string.val,
+                  left->string.len) == 0;
+}
+
+
 /* ------------------------------------------------------------------ */
 /*  DDL helpers (schema create / drop for FDW foreign tables)          */
 /* ------------------------------------------------------------------ */
@@ -246,6 +258,23 @@ iceberg_update_namespace_properties(PG_FUNCTION_ARGS)
         pfree(type_str);
     }
 
+    if (p_removals != NULL)
+    {
+        JsonbSuperHeader rem_header = (JsonbSuperHeader) VARDATA(p_removals);
+        JsonbIterator *it;
+        JsonbValue v;
+        int tok;
+
+        it = JsonbIteratorInit(rem_header);
+        while ((tok = JsonbIteratorNext(&it, &v, true)) != WJB_DONE)
+        {
+            if (tok == WJB_ELEM && v.type != jbvString)
+                ereport(ERROR,
+                        (errcode(ERRCODE_ICEBERG_INVALID_PARAM),
+                         errmsg("p_removals must be a JSONB array of strings")));
+        }
+    }
+
     /* 5. Validate: p_updates (if non-NULL) must be a JSONB object */
     if (p_updates != NULL)
     {
@@ -265,41 +294,62 @@ iceberg_update_namespace_properties(PG_FUNCTION_ARGS)
     {
         JsonbSuperHeader rem_header = (JsonbSuperHeader) VARDATA(p_removals);
         JsonbSuperHeader upd_header = (JsonbSuperHeader) VARDATA(p_updates);
-        JsonbIterator *it;
-        JsonbValue v;
-        int tok;
+        JsonbIterator *rem_it;
+        JsonbValue rem_value;
+        int rem_tok;
 
-        it = JsonbIteratorInit(rem_header);
-        while ((tok = JsonbIteratorNext(&it, &v, true)) != WJB_DONE)
+        rem_it = JsonbIteratorInit(rem_header);
+        while ((rem_tok = JsonbIteratorNext(&rem_it, &rem_value, true)) != WJB_DONE)
         {
-            if (tok == WJB_ELEM)
+            if (rem_tok == WJB_ELEM)
             {
-                JsonbValue *found = FindJsonbValueFromUnsortedObjects(upd_header, &v);
-                if (found != NULL)
-                    ereport(ERROR,
-                            (errcode(ERRCODE_ICEBERG_CONSTRAINT_VIOL),
-                             errmsg("removals and updates must not contain overlapping keys")));
+                JsonbIterator *upd_it = JsonbIteratorInit(upd_header);
+                JsonbValue upd_value;
+                int upd_tok;
+
+                while ((upd_tok = JsonbIteratorNext(&upd_it, &upd_value, true)) != WJB_DONE)
+                {
+                    if (upd_tok == WJB_KEY && jsonb_string_equals(&rem_value, &upd_value))
+                        ereport(ERROR,
+                                (errcode(ERRCODE_ICEBERG_CONSTRAINT_VIOL),
+                                 errmsg("removals and updates must not contain overlapping keys")));
+                }
             }
         }
     }
 
-    /* 7. TODO: META UpdateNamespaceProperties
-     *
-     * char *removals_str = (p_removals != NULL)
-     *     ? jsonb_to_cstring(p_removals)
-     *     : "[]";
-     * char *updates_str = (p_updates != NULL)
-     *     ? jsonb_to_cstring(p_updates)
-     *     : "{}";
-     * char *result = iceberg_meta_update_namespace_properties(
-     *     p_namespace, removals_str, updates_str);
-     * PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in, CStringGetDatum(result)));
-     */
+    /* 7. Update namespace properties via META */
+    {
+        char *removals_str = (p_removals != NULL)
+            ? DatumGetCString(DirectFunctionCall1(jsonb_out, JsonbGetDatum(p_removals)))
+            : pstrdup("[]");
+        char *updates_str = (p_updates != NULL)
+            ? DatumGetCString(DirectFunctionCall1(jsonb_out, JsonbGetDatum(p_updates)))
+            : pstrdup("{}");
+        char *result = NULL;
 
-    /* 8. Stub: return empty object.
-     * TODO: Replace with META.UpdateNamespaceProperties() result once META module is available. */
-    PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
-        CStringGetDatum("{}")));
+        PG_TRY();
+        {
+            result = iceberg_meta_update_namespace_properties(
+                p_namespace, removals_str, updates_str);
+        }
+        PG_CATCH();
+        {
+            ErrorData *edata = CopyErrorData();
+            iceberg_err_rethrow_metadata(edata, "update namespace properties");
+        }
+        PG_END_TRY();
+
+        {
+            Datum result_datum = DirectFunctionCall1(jsonb_in,
+                CStringGetDatum(result));
+
+            pfree(removals_str);
+            pfree(updates_str);
+            pfree(result);
+            PG_RETURN_DATUM(result_datum);
+        }
+    }
 }
 
 
@@ -554,14 +604,27 @@ iceberg_list_namespaces(PG_FUNCTION_ARGS)
                      errmsg("The given namespace does not exist")));
     }
 
-    /* 4. TODO: META ListNamespaces */
-    /* TODO:
-     * char *result = iceberg_meta_list_namespaces(p_parent, p_page_size, p_page_token);
-     * PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in, CStringGetDatum(result)));
-     */
+    /* 4. List namespaces via META */
+    {
+        char *result = NULL;
 
-    /* 5. Stub: return empty list with null next-page-token.
-     * TODO: Replace with META.ListNamespaces() result once META module is available. */
-    PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
-        CStringGetDatum("{\"namespaces\": [], \"next-page-token\": null}")));
+        PG_TRY();
+        {
+            result = iceberg_meta_list_namespaces(p_parent, p_page_size, p_page_token);
+        }
+        PG_CATCH();
+        {
+            ErrorData *edata = CopyErrorData();
+            iceberg_err_rethrow_metadata(edata, "list namespaces");
+        }
+        PG_END_TRY();
+
+        {
+            Datum result_datum = DirectFunctionCall1(jsonb_in,
+                CStringGetDatum(result));
+
+            pfree(result);
+            PG_RETURN_DATUM(result_datum);
+        }
+    }
 }

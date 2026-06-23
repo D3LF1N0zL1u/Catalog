@@ -66,6 +66,28 @@ typedef struct MetaRegisterTableInput {
 bool iceberg_meta_namespace_exists(const char *namespace_name);
 
 /*
+ * List namespaces with last-key cursor pagination.
+ *
+ * parent is NULL or empty for top-level namespaces.  The current
+ * implementation supports only one-level namespaces, so a non-empty existing
+ * parent returns an empty list.  Returns a palloc'd JSON string in the caller's
+ * memory context.
+ */
+char *iceberg_meta_list_namespaces(const char *parent,
+                                    int page_size,
+                                    const char *page_token);
+
+/*
+ * Atomically update namespace properties.
+ *
+ * removals_json must be a JSON array of strings; updates_json must be a JSON
+ * object.  Returns UpdateNamespacePropertiesResponse JSON.
+ */
+char *iceberg_meta_update_namespace_properties(const char *namespace_name,
+                                                const char *removals_json,
+                                                const char *updates_json);
+
+/*
  * Check whether a table already exists within the given namespace.
  * Both namespace_name and table_name are required (non-empty).
  */

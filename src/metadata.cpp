@@ -243,6 +243,200 @@ iceberg_meta_namespace_exists(const char *namespace_name)
     return exists;
 }
 
+/*
+ * Atomically update namespace properties and return the Iceberg REST
+ * UpdateNamespacePropertiesResponse shape.
+ */
+char *
+iceberg_meta_update_namespace_properties(const char *namespace_name,
+                                         const char *removals_json,
+                                         const char *updates_json)
+{
+    Datum values[3];
+    Oid argtypes[3] = {TEXTOID, TEXTOID, TEXTOID};
+    const char *removals = removals_json == NULL ? "[]" : removals_json;
+    const char *updates = updates_json == NULL ? "{}" : updates_json;
+    StringInfoData result;
+    MemoryContext caller_context = CurrentMemoryContext;
+    bool spi_connected = false;
+    char *old_properties = NULL;
+    int rc;
+
+    validate_name(namespace_name, "namespace_name");
+    initStringInfo(&result);
+
+    PG_TRY();
+    {
+        connect_spi();
+        spi_connected = true;
+
+        values[0] = CStringGetTextDatum(removals);
+        values[1] = CStringGetTextDatum(updates);
+
+        rc = ICEBERG_SPI_EXECUTE_WITH_ARGS(
+            "SELECT "
+            "    jsonb_typeof($1::jsonb) = 'array', "
+            "    jsonb_typeof($2::jsonb) = 'object'",
+            2, argtypes, values, NULL, true, 1);
+        if (rc != SPI_OK_SELECT || SPI_processed != 1)
+            ereport(ERROR,
+                    (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                     errmsg("failed to validate namespace property update JSON")));
+
+        {
+            bool isnull;
+            bool removals_is_array = DatumGetBool(SPI_getbinval(SPI_tuptable->vals[0],
+                                                                SPI_tuptable->tupdesc,
+                                                                1, &isnull));
+            bool updates_is_object = DatumGetBool(SPI_getbinval(SPI_tuptable->vals[0],
+                                                                SPI_tuptable->tupdesc,
+                                                                2, &isnull));
+
+            if (!removals_is_array)
+                ereport(ERROR,
+                        (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                         errmsg("removals must be a JSON array")));
+            if (!updates_is_object)
+                ereport(ERROR,
+                        (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                         errmsg("updates must be a JSON object")));
+        }
+
+        rc = ICEBERG_SPI_EXECUTE_WITH_ARGS(
+            "SELECT "
+            "    COALESCE((SELECT bool_and(jsonb_typeof(value) = 'string') "
+            "              FROM jsonb_array_elements($1::jsonb)), true), "
+            "    EXISTS ("
+            "        SELECT 1 "
+            "        FROM jsonb_array_elements_text($1::jsonb) AS r(key) "
+            "        JOIN jsonb_each($2::jsonb) AS u(key, value) USING (key)"
+            "    )",
+            2, argtypes, values, NULL, true, 1);
+        if (rc != SPI_OK_SELECT || SPI_processed != 1)
+            ereport(ERROR,
+                    (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                     errmsg("failed to validate namespace property update JSON")));
+
+        {
+            bool isnull;
+            bool removals_are_strings = DatumGetBool(SPI_getbinval(SPI_tuptable->vals[0],
+                                                                   SPI_tuptable->tupdesc,
+                                                                   1, &isnull));
+            bool has_overlap = DatumGetBool(SPI_getbinval(SPI_tuptable->vals[0],
+                                                          SPI_tuptable->tupdesc,
+                                                          2, &isnull));
+
+            if (!removals_are_strings)
+                ereport(ERROR,
+                        (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                         errmsg("removals must be a JSON array of strings")));
+            if (has_overlap)
+                ereport(ERROR,
+                        (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                         errmsg("removals and updates must not contain overlapping keys")));
+        }
+
+        values[0] = CStringGetTextDatum(namespace_name);
+        rc = ICEBERG_SPI_EXECUTE_WITH_ARGS(
+            "SELECT properties::text "
+            "FROM iceberg_catalog.namespaces "
+            "WHERE catalog_name = current_database()::text "
+            "  AND namespace = $1 "
+            "FOR UPDATE",
+            1, argtypes, values, NULL, false, 1);
+        if (rc != SPI_OK_SELECT)
+            ereport(ERROR,
+                    (errcode(ERRCODE_INTERNAL_ERROR),
+                     errmsg("metadata namespace property lock query failed")));
+        if (SPI_processed == 0)
+            ereport(ERROR,
+                    (errcode(ERRCODE_UNDEFINED_OBJECT),
+                     errmsg("namespace \"%s\" does not exist", namespace_name)));
+
+        {
+            char *properties_value = SPI_getvalue(SPI_tuptable->vals[0],
+                                                  SPI_tuptable->tupdesc, 1);
+
+            old_properties = pstrdup(properties_value != NULL ? properties_value : "{}");
+        }
+
+        values[0] = CStringGetTextDatum(namespace_name);
+        values[1] = CStringGetTextDatum(removals);
+        values[2] = CStringGetTextDatum(updates);
+        rc = ICEBERG_SPI_EXECUTE_WITH_ARGS(
+            "UPDATE iceberg_catalog.namespaces n "
+            "SET properties = ("
+            "    WITH RECURSIVE removals AS ("
+            "        SELECT row_number() OVER () AS rn, key "
+            "        FROM jsonb_array_elements_text($2::jsonb) AS r(key)"
+            "    ), folded(rn, props) AS ("
+            "        SELECT 0::bigint, n.properties "
+            "        UNION ALL "
+            "        SELECT removals.rn, folded.props - removals.key "
+            "        FROM folded "
+            "        JOIN removals ON removals.rn = folded.rn + 1"
+            "    ) "
+            "    SELECT props FROM folded ORDER BY rn DESC LIMIT 1"
+            ") || $3::jsonb "
+            "WHERE catalog_name = current_database()::text "
+            "  AND namespace = $1",
+            3, argtypes, values, NULL, false, 0);
+        if (rc != SPI_OK_UPDATE)
+            ereport(ERROR,
+                    (errcode(ERRCODE_INTERNAL_ERROR),
+                     errmsg("metadata namespace property update failed")));
+        if (SPI_processed != 1)
+            ereport(ERROR,
+                    (errcode(ERRCODE_UNDEFINED_OBJECT),
+                     errmsg("namespace \"%s\" does not exist", namespace_name)));
+
+        values[0] = CStringGetTextDatum(old_properties);
+        values[1] = CStringGetTextDatum(removals);
+        values[2] = CStringGetTextDatum(updates);
+        rc = ICEBERG_SPI_EXECUTE_WITH_ARGS(
+            "SELECT "
+            "    COALESCE((SELECT jsonb_agg(key ORDER BY key) "
+            "              FROM jsonb_each($3::jsonb)), '[]'::jsonb)::text, "
+            "    COALESCE((SELECT jsonb_agg(key ORDER BY key) "
+            "              FROM jsonb_array_elements_text($2::jsonb) AS r(key) "
+            "              WHERE $1::jsonb ? key), '[]'::jsonb)::text, "
+            "    COALESCE((SELECT jsonb_agg(key ORDER BY key) "
+            "              FROM jsonb_array_elements_text($2::jsonb) AS r(key) "
+            "              WHERE NOT ($1::jsonb ? key)), '[]'::jsonb)::text",
+            3, argtypes, values, NULL, true, 1);
+        if (rc != SPI_OK_SELECT || SPI_processed != 1)
+            ereport(ERROR,
+                    (errcode(ERRCODE_INTERNAL_ERROR),
+                     errmsg("metadata namespace property response query failed")));
+
+        appendStringInfo(&result,
+            "{\"updated\":%s,\"removed\":%s,\"missing\":%s}",
+            SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1),
+            SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 2),
+            SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 3));
+
+        finish_spi();
+        spi_connected = false;
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        finish_spi_quietly(&spi_connected);
+        throw_translated_spi_error(edata, "metadata update namespace properties");
+    }
+    PG_END_TRY();
+
+    {
+        char *caller_result;
+        MemoryContext oldctx = MemoryContextSwitchTo(caller_context);
+
+        caller_result = pstrdup(result.data);
+        MemoryContextSwitchTo(oldctx);
+        pfree(result.data);
+        return caller_result;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /*  Table existence checks                                             */
 /* ------------------------------------------------------------------ */
@@ -1491,6 +1685,194 @@ page_token_validate(const char *page_token)
 
     pfree(json);
     return NULL;
+}
+
+static const char *
+namespace_page_token_validate(const char *page_token)
+{
+    char *json;
+    int jsonlen;
+
+    if (page_token == NULL || page_token[0] == '\0')
+        return NULL;
+
+    json = b64_decode(page_token, (int) strlen(page_token), &jsonlen);
+    if (json == NULL)
+        return "page_token is not a valid base64-encoded string";
+
+    if (strstr(json, "\"type\":\"namespace\"") == NULL)
+    {
+        pfree(json);
+        return "page_token type must be namespace";
+    }
+
+    if (strstr(json, "\"last\":") == NULL)
+    {
+        pfree(json);
+        return "page_token missing required \"last\" field";
+    }
+
+    pfree(json);
+    return NULL;
+}
+
+static char *
+namespace_page_token_encode_next(const char *last_namespace)
+{
+    StringInfoData buf;
+    char *encoded;
+
+    initStringInfo(&buf);
+    appendStringInfo(&buf,
+        "{\"v\":1,\"type\":\"namespace\",\"last\":\"%s\"}",
+        last_namespace);
+    encoded = b64_encode(buf.data, buf.len);
+    pfree(buf.data);
+    return encoded;
+}
+
+/*
+ * List namespaces with last-key cursor pagination.
+ */
+char *
+iceberg_meta_list_namespaces(const char *parent,
+                             int page_size,
+                             const char *page_token)
+{
+    StringInfoData result;
+    MemoryContext caller_context = CurrentMemoryContext;
+    char *last_namespace_cursor;
+    const char *token_err;
+    bool spi_connected = false;
+    bool has_parent = parent != NULL && parent[0] != '\0';
+    int total = 0;
+    int i;
+
+    if (page_size < 1)
+        ereport(ERROR,
+                (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                 errmsg("page_size must be >= 1")));
+
+    token_err = namespace_page_token_validate(page_token);
+    if (token_err != NULL)
+        ereport(ERROR,
+                (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                 errmsg("%s", token_err)));
+
+    last_namespace_cursor = page_token_decode_last(page_token);
+    if (last_namespace_cursor == NULL)
+        ereport(ERROR,
+                (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                 errmsg("failed to decode page_token")));
+
+    initStringInfo(&result);
+
+    PG_TRY();
+    {
+        connect_spi();
+        spi_connected = true;
+
+        if (has_parent)
+        {
+            Datum parent_val[1] = {CStringGetTextDatum(parent)};
+            Oid parent_type[1] = {TEXTOID};
+            int parent_rc = ICEBERG_SPI_EXECUTE_WITH_ARGS(
+                "SELECT 1 "
+                "FROM iceberg_catalog.namespaces "
+                "WHERE catalog_name = current_database()::text "
+                "  AND namespace = $1",
+                1, parent_type, parent_val, NULL, true, 1);
+
+            if (parent_rc != SPI_OK_SELECT)
+                ereport(ERROR,
+                        (errcode(ERRCODE_INTERNAL_ERROR),
+                         errmsg("metadata namespace parent query failed")));
+            if (SPI_processed == 0)
+                ereport(ERROR,
+                        (errcode(ERRCODE_UNDEFINED_OBJECT),
+                         errmsg("namespace \"%s\" does not exist", parent)));
+
+            appendStringInfoString(&result, "{\"namespaces\":[],\"next-page-token\":null}");
+        }
+        else
+        {
+            Datum query_values[2];
+            Oid query_types[2] = {TEXTOID, INT4OID};
+            int query_rc;
+
+            query_values[0] = CStringGetTextDatum(last_namespace_cursor);
+            query_values[1] = Int32GetDatum(page_size + 1);
+
+            query_rc = ICEBERG_SPI_EXECUTE_WITH_ARGS(
+                "SELECT namespace "
+                "FROM iceberg_catalog.namespaces "
+                "WHERE catalog_name = current_database()::text "
+                "  AND ($1 = '' OR namespace > $1) "
+                "ORDER BY namespace ASC "
+                "LIMIT $2",
+                2, query_types, query_values, NULL, true, (int64)(page_size + 1));
+
+            if (query_rc != SPI_OK_SELECT)
+                ereport(ERROR,
+                        (errcode(ERRCODE_INTERNAL_ERROR),
+                         errmsg("metadata list namespaces query failed")));
+
+            total = (int) SPI_processed;
+
+            appendStringInfoString(&result, "{\"namespaces\":[");
+            for (i = 0; i < total && i < page_size; i++)
+            {
+                char *namespace_name = SPI_getvalue(SPI_tuptable->vals[i],
+                                                    SPI_tuptable->tupdesc, 1);
+
+                if (i > 0)
+                    appendStringInfoChar(&result, ',');
+
+                appendStringInfo(&result, "[\"%s\"]", namespace_name);
+            }
+            appendStringInfoChar(&result, ']');
+
+            if (total > page_size)
+            {
+                char *last_returned = SPI_getvalue(SPI_tuptable->vals[page_size - 1],
+                                                   SPI_tuptable->tupdesc, 1);
+                char *next_token = namespace_page_token_encode_next(last_returned);
+
+                appendStringInfo(&result, ",\"next-page-token\":\"%s\"", next_token);
+                pfree(next_token);
+            }
+            else
+            {
+                appendStringInfoString(&result, ",\"next-page-token\":null");
+            }
+
+            appendStringInfoChar(&result, '}');
+        }
+
+        finish_spi();
+        spi_connected = false;
+    }
+    PG_CATCH();
+    {
+        ErrorData *edata = CopyErrorData();
+        finish_spi_quietly(&spi_connected);
+        if (last_namespace_cursor != NULL)
+            pfree(last_namespace_cursor);
+        throw_translated_spi_error(edata, "metadata list namespaces");
+    }
+    PG_END_TRY();
+
+    pfree(last_namespace_cursor);
+
+    {
+        char *caller_result;
+        MemoryContext oldctx = MemoryContextSwitchTo(caller_context);
+
+        caller_result = pstrdup(result.data);
+        MemoryContextSwitchTo(oldctx);
+        pfree(result.data);
+        return caller_result;
+    }
 }
 
 /* ------------------------------------------------------------------ */
