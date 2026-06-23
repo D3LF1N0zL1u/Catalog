@@ -34,6 +34,26 @@ SELECT iceberg_catalog.add_column(
     p_column_doc => 'A documented column'
 );
 
+-- 3.1 验证外表已增加新列
+SELECT count(*) = 1 AS col_new_col_exists
+FROM pg_attribute a
+JOIN pg_class c ON a.attrelid = c.oid
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'test_ns' AND c.relname = 'test_tbl'
+  AND a.attname = 'new_col' AND a.attnum > 0 AND NOT a.attisdropped;
+SELECT count(*) = 1 AS col_col_a_exists
+FROM pg_attribute a
+JOIN pg_class c ON a.attrelid = c.oid
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'test_ns' AND c.relname = 'test_tbl'
+  AND a.attname = 'col_a' AND a.attnum > 0 AND NOT a.attisdropped;
+SELECT count(*) = 1 AS col_col_with_doc_exists
+FROM pg_attribute a
+JOIN pg_class c ON a.attrelid = c.oid
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'test_ns' AND c.relname = 'test_tbl'
+  AND a.attname = 'col_with_doc' AND a.attnum > 0 AND NOT a.attisdropped;
+
 -- 4. p_namespace 为空串 → 报错
 SAVEPOINT sp4;
 SELECT iceberg_catalog.add_column('', 'tbl', 'col', 'string');

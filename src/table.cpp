@@ -636,6 +636,23 @@ iceberg_rename_table(PG_FUNCTION_ARGS)
     }
     PG_END_TRY();
 
+    /* 4.1 Rename Foreign Table */
+    {
+        PG_TRY();
+        {
+            iceberg_fdw_rename_foreign_table(p_src_ns, p_src_table, p_dst_ns, p_dst_table);
+        }
+        PG_CATCH();
+        {
+            ErrorData *edata = CopyErrorData();
+            char *msg = edata->message ? pstrdup(edata->message) : pstrdup("unknown error");
+            FreeErrorData(edata); FlushErrorState();
+            ereport(ERROR, (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+                    errmsg("Rename foreign table failed: %s", msg)));
+        }
+        PG_END_TRY();
+    }
+
     /* 4. NOTE: SDK RenameTable is not needed.
      *
      * The design doc reserves catalog->RenameTable() for implementations that
@@ -1128,6 +1145,23 @@ iceberg_add_column(PG_FUNCTION_ARGS)
             iceberg_err_rethrow_metadata(edata, "add column metadata commit");
         }
         PG_END_TRY();
+
+        /* 7.1 Add column to foreign table */
+        {
+            PG_TRY();
+            {
+                iceberg_fdw_add_column(p_namespace, p_table, p_column_name, p_column_type);
+            }
+            PG_CATCH();
+            {
+                ErrorData *edata = CopyErrorData();
+                char *msg = edata->message ? pstrdup(edata->message) : pstrdup("unknown error");
+                FreeErrorData(edata); FlushErrorState();
+                ereport(ERROR, (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+                        errmsg("Add column foreign table failed: %s", msg)));
+            }
+            PG_END_TRY();
+        }
 
         iceberg_meta_free_table_info(info);
 
