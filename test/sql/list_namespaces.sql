@@ -1,95 +1,63 @@
--- ============================================================================
--- iceberg_catalog.list_namespaces 测试用例
---
--- 前置条件：iceberg_catalog 扩展已安装
--- ============================================================================
-
 BEGIN;
 
--- ============================================================================
--- 第一部分：正常场景 — 返回类型与结构校验
--- ============================================================================
-
--- 1. 默认参数调用，返回合法 JSONB
+-- Basic response shape.
 SELECT jsonb_typeof(iceberg_catalog.list_namespaces()) AS result_type;
-
--- 2. 返回结构包含 "namespaces" 和 "next-page-token" 两个顶层 key
 SELECT
-    iceberg_catalog.list_namespaces() ? 'namespaces'       AS has_namespaces,
-    iceberg_catalog.list_namespaces() ? 'next-page-token'  AS has_next_page_token;
-
--- 3. "namespaces" 字段应为数组
+    iceberg_catalog.list_namespaces() ? 'namespaces'      AS has_namespaces,
+    iceberg_catalog.list_namespaces() ? 'next-page-token' AS has_next_page_token;
 SELECT jsonb_typeof(iceberg_catalog.list_namespaces() -> 'namespaces') AS namespaces_type;
 
--- 4. 首页 next-page-token 存在（stub 返回 null）
-SELECT iceberg_catalog.list_namespaces() -> 'next-page-token' AS next_token;
-
--- ============================================================================
--- 第二部分：参数组合
--- ============================================================================
-
--- 5. 指定 p_parent = NULL（列出顶层 namespace，默认行为）
-SELECT iceberg_catalog.list_namespaces(p_parent => NULL);
-
--- 6. 指定 p_page_size
-SELECT iceberg_catalog.list_namespaces(p_page_size => 50);
-
--- 7. 使用位置参数
-SELECT iceberg_catalog.list_namespaces(NULL, 100, NULL);
-
--- 8. 指定 p_page_token（分页）
-SELECT iceberg_catalog.list_namespaces(p_page_token => 'eyJvZmZzZXQiIDogMTB9');
-
--- 9. 全部参数使用命名传参
+-- Top-level namespaces are read from iceberg_catalog.namespaces.
 INSERT INTO iceberg_catalog.namespaces(catalog_name, namespace, properties)
-VALUES (current_database(), 'accounting', '{}'::JSONB);
+VALUES
+    (current_database(), 'ln_accounting', '{}'::jsonb),
+    (current_database(), 'ln_dept_a', '{}'::jsonb),
+    (current_database(), 'ln_dept_b', '{"owner": "alice"}'::jsonb);
 
-SELECT iceberg_catalog.list_namespaces(
-    p_parent     => 'accounting',
-    p_page_size  => 20,
-    p_page_token => NULL
-);
+SELECT iceberg_catalog.list_namespaces() -> 'namespaces' @> '[["ln_accounting"]]'::jsonb AS has_accounting;
+SELECT iceberg_catalog.list_namespaces() -> 'namespaces' @> '[["ln_dept_a"]]'::jsonb AS has_dept_a;
+SELECT iceberg_catalog.list_namespaces() -> 'namespaces' @> '[["ln_dept_b"]]'::jsonb AS has_dept_b;
 
--- ============================================================================
--- 第三部分：参数校验 — 报错场景
--- ============================================================================
+-- Parent namespaces list one-level children only.
+INSERT INTO iceberg_catalog.namespaces(catalog_name, namespace, properties)
+VALUES
+    (current_database(), 'ln_parent', '{}'::jsonb),
+    (current_database(), 'ln_parent.child_a', '{}'::jsonb),
+    (current_database(), 'ln_parent.child_b', '{}'::jsonb),
+    (current_database(), 'ln_parent.child_b.grandchild', '{}'::jsonb);
 
--- 10. p_page_size = 0 → 报错 (P0001)
-SAVEPOINT sp10;
+SELECT iceberg_catalog.list_namespaces('ln_parent') -> 'namespaces' @> '[["ln_parent", "child_a"]]'::jsonb AS has_child_a;
+SELECT iceberg_catalog.list_namespaces('ln_parent') -> 'namespaces' @> '[["ln_parent", "child_b"]]'::jsonb AS has_child_b;
+SELECT iceberg_catalog.list_namespaces('ln_parent') -> 'namespaces' @> '[["ln_parent", "grandchild"]]'::jsonb AS has_grandchild;
+
+-- Last-key pagination produces and accepts an opaque next-page-token.
+WITH first_page AS (
+    SELECT iceberg_catalog.list_namespaces(NULL, 1, NULL) AS page
+)
+SELECT
+    jsonb_array_length(page -> 'namespaces') AS first_page_count,
+    jsonb_typeof(page -> 'next-page-token') AS token_type
+FROM first_page;
+
+WITH first_page AS (
+    SELECT iceberg_catalog.list_namespaces(NULL, 1, NULL) AS page
+)
+SELECT jsonb_array_length(
+    iceberg_catalog.list_namespaces(NULL, 100, page ->> 'next-page-token') -> 'namespaces'
+) > 0 AS second_page_has_rows
+FROM first_page;
+
+-- Argument validation.
+SAVEPOINT sp_page_zero;
 SELECT iceberg_catalog.list_namespaces(p_page_size => 0);
-ROLLBACK TO SAVEPOINT sp10;
+ROLLBACK TO SAVEPOINT sp_page_zero;
 
--- 11. p_page_size = -1 → 报错 (P0001)
-SAVEPOINT sp11;
-SELECT iceberg_catalog.list_namespaces(p_page_size => -1);
-ROLLBACK TO SAVEPOINT sp11;
+SAVEPOINT sp_bad_parent;
+SELECT iceberg_catalog.list_namespaces(p_parent => 'ln_missing_parent');
+ROLLBACK TO SAVEPOINT sp_bad_parent;
 
--- ============================================================================
--- 第四部分：Parent namespace 不存在 — 报错场景
--- ============================================================================
-
--- 12. p_parent 指定的父级 Namespace 不存在 → 报错 (P0004)
-SAVEPOINT sp12;
-SELECT iceberg_catalog.list_namespaces(p_parent => 'non_existent_parent');
-ROLLBACK TO SAVEPOINT sp12;
-
--- ============================================================================
--- 第五部分：边界场景
--- ============================================================================
-
--- 13. p_page_size 为大值
-SELECT iceberg_catalog.list_namespaces(p_page_size => 1000000);
-
--- 14. p_page_size = 1（最小值合法）
-SELECT iceberg_catalog.list_namespaces(p_page_size => 1);
-
--- 15. 插入 namespace 后调用 list（stub 返回空列表，TODO：META 接入后应包含已插入的 namespace）
-INSERT INTO iceberg_catalog.namespaces(catalog_name, namespace, properties)
-VALUES (current_database(), 'dept_a', '{}'::JSONB);
-
-INSERT INTO iceberg_catalog.namespaces(catalog_name, namespace, properties)
-VALUES (current_database(), 'dept_b', '{"owner": "alice"}'::JSONB);
-
-SELECT iceberg_catalog.list_namespaces();
+SAVEPOINT sp_bad_token;
+SELECT iceberg_catalog.list_namespaces(p_page_token => 'not-base64');
+ROLLBACK TO SAVEPOINT sp_bad_token;
 
 ROLLBACK;

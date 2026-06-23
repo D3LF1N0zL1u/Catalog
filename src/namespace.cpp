@@ -23,6 +23,11 @@
 #include "metadata.h"
 #include "namespace.h"
 
+static char *
+jsonb_to_cstring(Jsonb *value)
+{
+    return DatumGetCString(DirectFunctionCall1(jsonb_out, PointerGetDatum(value)));
+}
 
 /* ------------------------------------------------------------------ */
 /*  DDL helpers (schema create / drop for FDW foreign tables)          */
@@ -283,23 +288,30 @@ iceberg_update_namespace_properties(PG_FUNCTION_ARGS)
         }
     }
 
-    /* 7. TODO: META UpdateNamespaceProperties
-     *
-     * char *removals_str = (p_removals != NULL)
-     *     ? jsonb_to_cstring(p_removals)
-     *     : "[]";
-     * char *updates_str = (p_updates != NULL)
-     *     ? jsonb_to_cstring(p_updates)
-     *     : "{}";
-     * char *result = iceberg_meta_update_namespace_properties(
-     *     p_namespace, removals_str, updates_str);
-     * PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in, CStringGetDatum(result)));
-     */
+    {
+        char *removals_str = (p_removals != NULL)
+            ? jsonb_to_cstring(p_removals)
+            : pstrdup("[]");
+        char *updates_str = (p_updates != NULL)
+            ? jsonb_to_cstring(p_updates)
+            : pstrdup("{}");
+        char *json_result = NULL;
 
-    /* 8. Stub: return empty object.
-     * TODO: Replace with META.UpdateNamespaceProperties() result once META module is available. */
-    PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
-        CStringGetDatum("{}")));
+        PG_TRY();
+        {
+            json_result = iceberg_meta_update_namespace_properties(
+                p_namespace, removals_str, updates_str);
+        }
+        PG_CATCH();
+        {
+            ErrorData *edata = CopyErrorData();
+            iceberg_err_rethrow_metadata(edata, "update namespace properties");
+        }
+        PG_END_TRY();
+
+        PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
+            CStringGetDatum(json_result)));
+    }
 }
 
 
@@ -554,14 +566,21 @@ iceberg_list_namespaces(PG_FUNCTION_ARGS)
                      errmsg("The given namespace does not exist")));
     }
 
-    /* 4. TODO: META ListNamespaces */
-    /* TODO:
-     * char *result = iceberg_meta_list_namespaces(p_parent, p_page_size, p_page_token);
-     * PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in, CStringGetDatum(result)));
-     */
+    {
+        char *json_result = NULL;
 
-    /* 5. Stub: return empty list with null next-page-token.
-     * TODO: Replace with META.ListNamespaces() result once META module is available. */
-    PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
-        CStringGetDatum("{\"namespaces\": [], \"next-page-token\": null}")));
+        PG_TRY();
+        {
+            json_result = iceberg_meta_list_namespaces(p_parent, p_page_size, p_page_token);
+        }
+        PG_CATCH();
+        {
+            ErrorData *edata = CopyErrorData();
+            iceberg_err_rethrow_metadata(edata, "list namespaces");
+        }
+        PG_END_TRY();
+
+        PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
+            CStringGetDatum(json_result)));
+    }
 }
