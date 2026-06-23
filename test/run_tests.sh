@@ -32,9 +32,10 @@ normalize() {
         /^[[:space:]]*$/d
         s/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/<uuid>/g
         s/"last-updated-ms": [0-9]+/"last-updated-ms": <ts>/g
+        s/"timestamp-ms": [0-9]+/"timestamp-ms": <ts>/g
         s/iceberg_test/<test_db>/g
-	        s#gsql:[^ ]+test/sql/#gsql:test/sql/#g
-	        s/before last updated timestamp [0-9]+/before last updated timestamp <ts>/g
+        s#gsql:[^ ]+test/sql/#gsql:test/sql/#g
+        s/before last updated timestamp [0-9]+/before last updated timestamp <ts>/g
     '
 }
 

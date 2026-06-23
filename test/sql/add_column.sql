@@ -25,14 +25,14 @@ SELECT
     iceberg_catalog.add_column('test_ns', 'test_tbl', 'col_a', 'int') ? 'metadata-location' AS has_metadata_location,
     iceberg_catalog.add_column('test_ns', 'test_tbl', 'col_b', 'long') ? 'metadata'          AS has_metadata;
 
--- 3. 传入 p_column_doc 参数
-SELECT iceberg_catalog.add_column(
+-- 3. 传入 p_column_doc 参数，返回合法 JSONB
+SELECT jsonb_typeof(iceberg_catalog.add_column(
     'test_ns',
     'test_tbl',
     'col_with_doc',
     'decimal(10,2)',
     p_column_doc => 'A documented column'
-);
+)) AS result_type;
 
 -- 3.1 验证外表已增加新列
 SELECT count(*) = 1 AS col_new_col_exists
