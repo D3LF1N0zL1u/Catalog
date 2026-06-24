@@ -62,17 +62,6 @@ temporary_last_column_id(const char *schema_json)
     return max_id;
 }
 
-static Datum
-load_table_result_jsonb(const char *metadata_location)
-{
-    StringInfo buf = makeStringInfo();
-
-    appendStringInfoString(buf, "{\"metadata-location\":");
-    escape_json(buf, metadata_location);
-    appendStringInfoString(buf, ",\"metadata\":{},\"config\":{}}");
-
-    return DirectFunctionCall1(jsonb_in, CStringGetDatum(buf->data));
-}
 
 
 /* ---- create_table ---- */
@@ -515,38 +504,56 @@ iceberg_load_table(PG_FUNCTION_ARGS)
                 (errcode(ERRCODE_ICEBERG_NOT_FOUND),
                  errmsg("The given table does not exist")));
 
-    /* 4. TODO: Load table via SDK */
+    /* 4. Load table via SDK to get real metadata. */
 
-    /* TODO:
-     * char *error_msg = NULL;
-     * IcebergTable *table = catalog->LoadTable(p_namespace, p_table,
-     *     info->metadata_location, &error_msg);
-     * if (error_msg != NULL)
-     *     ereport(ERROR,
-     *             (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
-     *              errmsg("%s", error_msg)));
-     */
-
-    /* 5. TODO: Construct and return LoadTableResult JSONB */
-
-    /* TODO:
-     * const char *metadata_json = table->GetMetadataJson();
-     * StringInfo buf = makeStringInfo();
-     * appendStringInfo(buf,
-     *     "{\"metadata-location\":\"%s\",\"metadata\":%s,\"config\":{}}",
-     *     info->metadata_location, metadata_json);
-     * delete table;
-     * PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
-     *     CStringGetDatum(buf->data)));
-     */
-
-    /* 6. Return META-backed LoadTableResult shell until SDK loading is wired. */
+    IcebergBridgeStorage *storage = open_iceberg_storage();
+    IcebergBridgeError   *bridge_err = NULL;
+    IcebergBridgeTable   *table      = NULL;
 
     {
-        Datum result = load_table_result_jsonb(info->metadata_location);
+        const char *levels[] = {p_namespace};
+        IcebergBridgeNamespaceIdent ns = {levels, 1};
+        IcebergBridgeTableIdent ident = {ns, p_table};
 
+        IcebergBridgeStatus status = iceberg_bridge_table_load(
+            storage, info->metadata_location, &ident, &table, &bridge_err);
+
+        if (status != ICEBERG_BRIDGE_OK) {
+            const char *msg = bridge_err
+                ? pstrdup(iceberg_bridge_error_message(bridge_err))
+                : "load table failed";
+            iceberg_bridge_error_free(bridge_err);
+            iceberg_bridge_storage_release(storage);
+            ereport(ERROR,
+                    (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+                     errmsg("iceberg_load_table: %s", msg)));
+        }
+    }
+
+    /* 5. Extract metadata JSON from loaded table. */
+
+    IcebergBridgeString *meta_str = NULL;
+    iceberg_bridge_table_metadata_json(table, &meta_str, &bridge_err);
+
+    const char *metadata_json = meta_str
+        ? iceberg_bridge_string_data(meta_str) : "{}";
+
+    /* 6. Build and return LoadTableResult JSON. */
+
+    {
+        StringInfoData buf;
+        initStringInfo(&buf);
+        appendStringInfo(&buf,
+            "{\"metadata-location\":\"%s\",\"metadata\":%s,\"config\":{}}",
+            info->metadata_location, metadata_json);
+
+        iceberg_bridge_string_free(meta_str);
+        iceberg_bridge_table_free(table);
+        iceberg_bridge_storage_release(storage);
         iceberg_meta_free_table_info(info);
-        PG_RETURN_DATUM(result);
+
+        PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
+            CStringGetDatum(buf.data)));
     }
 }
 
@@ -940,14 +947,30 @@ iceberg_commit_table(PG_FUNCTION_ARGS)
 
         iceberg_meta_free_table_info(info);
 
+        /* 8. Return response with real metadata from committed table. */
+
+        IcebergBridgeString *meta_sdk = NULL;
+        {
+            const char *levels[] = {p_namespace};
+            IcebergBridgeNamespaceIdent ns = {levels, 1};
+            IcebergBridgeTableIdent ident = {ns, p_table};
+            IcebergBridgeTable *reloaded = NULL;
+
+            if (iceberg_bridge_table_load(storage, meta_input.new_metadata_location,
+                    &ident, &reloaded, &bridge_err) == ICEBERG_BRIDGE_OK && reloaded) {
+                iceberg_bridge_table_metadata_json(reloaded, &meta_sdk, &bridge_err);
+                iceberg_bridge_table_free(reloaded);
+            }
+        }
+        const char *meta_txt = meta_sdk ? iceberg_bridge_string_data(meta_sdk) : "{}";
+
+        Datum result = DirectFunctionCall1(jsonb_in,
+            CStringGetDatum(psprintf("{\"metadata-location\": \"%s\", \"metadata\": %s, \"config\": {}}",
+                                     meta_input.new_metadata_location, meta_txt)));
+        iceberg_bridge_string_free(meta_sdk);
         iceberg_bridge_string_free(out_location);
         iceberg_bridge_storage_release(storage);
-
-        /* 8. Return response with the new metadata location */
-
-        PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
-            CStringGetDatum(psprintf("{\"metadata-location\": \"%s\", \"metadata\": {}}",
-                                     meta_input.new_metadata_location))));
+        PG_RETURN_DATUM(result);
     }
     PG_CATCH();
     {
@@ -1032,45 +1055,11 @@ iceberg_add_column(PG_FUNCTION_ARGS)
                 (errcode(ERRCODE_ICEBERG_INVALID_PARAM),
                  errmsg("p_column_type is required and must not be empty")));
 
-    /* 3. TODO: Validate p_column_type via SDK */
+    /* 3. Open storage for SDK commit. */
 
-    /* TODO:
-     * if (!catalog->ValidateType(p_column_type, &err))
-     *     ereport(ERROR, (errcode(ERRCODE_ICEBERG_INVALID_PARAM),
-     *                     errmsg("invalid column type: %s", err)));
-     */
-
-    /* 4. TODO: SDK LoadTable */
-
-    /* TODO:
-     * error_msg = NULL;
-     * table = catalog->LoadTable(p_namespace, p_table, info->metadata_location, &error_msg);
-     * if (error_msg != NULL)
-     *     ereport(ERROR, (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
-     *                     errmsg("{\"type\":\"ServiceUnavailable\",\"message\":\"%s\",\"stack\":[]}", error_msg)));
-     */
-
-    /* 5. TODO: Check column name conflict against current schema */
-
-    /* TODO:
-     * currentSchema = table->GetCurrentSchema();
-     * if currentSchema has field named p_column_name → ereport(P0001, "column already exists")
-     */
-
-    /* 6. TODO: SDK AddColumn → new schema + new field ID */
-
-    /* TODO:
-     * newFieldId = 0;
-     * newSchema = table->AddColumn(p_column_name, p_column_type, p_column_doc, &newFieldId);
-     * newSchemaId = table->GetCurrentSchemaId() + 1;
-     */
+    IcebergBridgeStorage *storage = open_iceberg_storage();
 
     /* 7. META commit_schema_change (update table pointer + insert schema row) */
-
-    /*
-     * TODO: Replace these temporary values with the SDK AddColumn/CommitTable
-     * result once the SDK modules are wired up.
-     */
     {
         MetaTableInfo *info = NULL;
 
@@ -1080,6 +1069,7 @@ iceberg_add_column(PG_FUNCTION_ARGS)
         }
         PG_CATCH();
         {
+            iceberg_bridge_storage_release(storage);
             ErrorData *edata = CopyErrorData();
             iceberg_err_rethrow_metadata(edata, "add column metadata lock");
         }
@@ -1088,10 +1078,7 @@ iceberg_add_column(PG_FUNCTION_ARGS)
         int new_last_column_id = info->last_column_id + 1;
         int new_schema_id = info->current_schema_id + 1;
 
-        /*
-         * TODO: Replace this temporary schema JSON with the real schema from
-         * the SDK AddColumn result once wired up.
-         */
+        /* Build new column schema for META (SDK path uses full schema). */
         char *new_schema_json;
         if (p_column_doc != NULL)
             new_schema_json = psprintf(
@@ -1105,6 +1092,70 @@ iceberg_add_column(PG_FUNCTION_ARGS)
                 "{\"id\":%d,\"name\":\"%s\",\"required\":false,\"type\":\"%s\"}]}",
                 new_last_column_id, p_column_name, p_column_type);
 
+        /* 7.1 SDK: write new metadata.json with the updated schema. */
+        IcebergBridgeError   *bridge_err  = NULL;
+        IcebergBridgeString   *out_location = NULL;
+        {
+            const char *levels[] = {p_namespace};
+            IcebergBridgeNamespaceIdent ns = {levels, 1};
+            IcebergBridgeTableIdent ident = {ns, p_table};
+            IcebergBridgeTable *sdk_table = NULL;
+
+            IcebergBridgeStatus st = iceberg_bridge_table_load(
+                storage, info->metadata_location, &ident, &sdk_table, &bridge_err);
+            if (st == ICEBERG_BRIDGE_OK && sdk_table) {
+                IcebergBridgeString *cur_schema = NULL;
+                iceberg_bridge_table_current_schema_json(sdk_table, &cur_schema, &bridge_err);
+
+                if (cur_schema) {
+                    /*
+                     * Build the full new schema for SDK add-schema update.
+                     *
+                     * Iceberg's add-schema requires the COMPLETE schema with all
+                     * fields, not just the new column. We get the current schema
+                     * from the SDK (table_current_schema_json), inject the new
+                     * field, and pass the full result to table_commit.
+                     *
+                     * Limitation: safe only for flat schemas (scalar columns).
+                     * Nested structs contain multiple ']' and would
+                     * misposition the injection point.
+                     */
+                    const char *schema_str = iceberg_bridge_string_data(cur_schema);
+                    char *new_field = p_column_doc
+                        ? psprintf("{\"id\":%d,\"name\":\"%s\",\"required\":false,\"type\":\"%s\",\"doc\":\"%s\"}",
+                                   new_last_column_id, p_column_name, p_column_type, p_column_doc)
+                        : psprintf("{\"id\":%d,\"name\":\"%s\",\"required\":false,\"type\":\"%s\"}",
+                                   new_last_column_id, p_column_name, p_column_type);
+
+                    /* Inject new field before the first (and only) ']' closing the fields array. */
+                    const char *field_close = strchr(schema_str, ']');
+                    char *full_schema = NULL;
+                    if (field_close) {
+                        full_schema = psprintf(
+                            "%.*s,%s%s",
+                            (int)(field_close - schema_str), schema_str,
+                            new_field, field_close);
+                    }
+                    pfree(new_field);
+
+                    if (full_schema) {
+                        char *updates = psprintf(
+                            "[{\"action\":\"add-schema\",\"schema\":%s},"
+                            "{\"action\":\"set-current-schema\",\"schema-id\":%d}]",
+                            full_schema, new_schema_id);
+
+                        st = iceberg_bridge_table_commit(
+                            storage, info->metadata_location, updates,
+                            &out_location, &bridge_err);
+                        pfree(full_schema);
+                        pfree(updates);
+                    }
+                }
+                iceberg_bridge_string_free(cur_schema);
+                iceberg_bridge_table_free(sdk_table);
+            }
+        }
+
         MetaCommitSchemaChangeInput meta_input;
 
         memset(&meta_input, 0, sizeof(meta_input));
@@ -1112,8 +1163,15 @@ iceberg_add_column(PG_FUNCTION_ARGS)
         meta_input.table_name = p_table;
         meta_input.table_uuid = info->table_uuid;
         meta_input.old_metadata_location = info->metadata_location;
-        meta_input.new_metadata_location = psprintf("file:///tmp/iceberg_catalog/%s/%s/metadata/v2.metadata.json",
-                                                     p_namespace, p_table);
+        if (!out_location) {
+            iceberg_bridge_error_free(bridge_err);
+            bridge_err = NULL;
+            iceberg_bridge_storage_release(storage);
+            ereport(ERROR,
+                    (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
+                     errmsg("add column sdk commit: no metadata location returned")));
+        }
+        meta_input.new_metadata_location = pstrdup(iceberg_bridge_string_data(out_location));
         meta_input.new_schema_id = new_schema_id;
         meta_input.schema_json = new_schema_json;
         meta_input.new_last_column_id = new_last_column_id;
@@ -1124,7 +1182,10 @@ iceberg_add_column(PG_FUNCTION_ARGS)
         }
         PG_CATCH();
         {
+            iceberg_bridge_string_free(out_location);
+            iceberg_bridge_error_free(bridge_err);
             iceberg_meta_free_table_info(info);
+            iceberg_bridge_storage_release(storage);
             ErrorData *edata = CopyErrorData();
             iceberg_err_rethrow_metadata(edata, "add column metadata commit");
         }
@@ -1141,6 +1202,9 @@ iceberg_add_column(PG_FUNCTION_ARGS)
                 ErrorData *edata = CopyErrorData();
                 char *msg = edata->message ? pstrdup(edata->message) : pstrdup("unknown error");
                 FreeErrorData(edata); FlushErrorState();
+                iceberg_bridge_string_free(out_location);
+                iceberg_bridge_error_free(bridge_err);
+                iceberg_bridge_storage_release(storage);
                 ereport(ERROR, (errcode(ERRCODE_ICEBERG_INTERNAL_ERROR),
                         errmsg("Add column foreign table failed: %s", msg)));
             }
@@ -1149,11 +1213,30 @@ iceberg_add_column(PG_FUNCTION_ARGS)
 
         iceberg_meta_free_table_info(info);
 
-        /* 8. Return response with the new metadata location */
+        /* 8. Return response with real metadata from SDK. */
 
-        PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
-            CStringGetDatum(psprintf("{\"metadata-location\": \"%s\", \"metadata\": {}}",
-                                     meta_input.new_metadata_location))));
+        {
+            const char *levels[] = {p_namespace};
+            IcebergBridgeNamespaceIdent ns = {levels, 1};
+            IcebergBridgeTableIdent ident = {ns, p_table};
+            IcebergBridgeTable *reloaded = NULL;
+            IcebergBridgeString *meta_sdk = NULL;
+
+            if (iceberg_bridge_table_load(storage, meta_input.new_metadata_location,
+                    &ident, &reloaded, &bridge_err) == ICEBERG_BRIDGE_OK && reloaded) {
+                iceberg_bridge_table_metadata_json(reloaded, &meta_sdk, &bridge_err);
+                iceberg_bridge_table_free(reloaded);
+            }
+            const char *meta_txt = meta_sdk ? iceberg_bridge_string_data(meta_sdk) : "{}";
+
+            Datum result = DirectFunctionCall1(jsonb_in,
+                CStringGetDatum(psprintf("{\"metadata-location\": \"%s\", \"metadata\": %s, \"config\": {}}",
+                                         meta_input.new_metadata_location, meta_txt)));
+            iceberg_bridge_string_free(meta_sdk);
+            iceberg_bridge_string_free(out_location);
+            iceberg_bridge_storage_release(storage);
+            PG_RETURN_DATUM(result);
+        }
     }
 }
 

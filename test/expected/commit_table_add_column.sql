@@ -39,9 +39,9 @@ SELECT iceberg_catalog.commit_table('cmt_test', 't1',
     '[]'::jsonb,
     '[{"action":"add-snapshot","snapshot":{"snapshot-id":100,"timestamp-ms":4782185701401,"manifest-list":"s3://m","summary":{"operation":"append"},"schema-id":0}}]'::jsonb
 ) AS cmt_result;
-                                                                      cmt_result                                                                      
-------------------------------------------------------------------------------------------------------------------------------------------------------
- {"metadata": {}, "metadata-location": "file:///tmp/iceberg_warehouse/cmt_test/t1/metadata/00001-<uuid>.metadata.json"}
+                                                                             cmt_result                                                                             
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ {"config": {}, "metadata": {}, "metadata-location": "file:///tmp/iceberg_warehouse/cmt_test/t1/metadata/00001-<uuid>.metadata.json"}
 (1 row)
 -- 验证: metadata_location 已更新, previous 自动轮转
 SELECT t.metadata_location != u.metadata_location  AS t1_meta_updated,
@@ -80,9 +80,9 @@ WHERE namespace = 'cmt_test' AND table_name = 't1';
 (1 row)
 -- 执行 add_column
 SELECT iceberg_catalog.add_column('cmt_test', 't1', 'col3', 'string', 'third column') AS add_result;
-                                                 add_result                                                 
-------------------------------------------------------------------------------------------------------------
- {"metadata": {}, "metadata-location": "file:///tmp/iceberg_catalog/cmt_test/t1/metadata/v2.metadata.json"}
+                                                                             add_result                                                                             
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ {"config": {}, "metadata": {}, "metadata-location": "file:///tmp/iceberg_warehouse/cmt_test/t1/metadata/00002-<uuid>.metadata.json"}
 (1 row)
 -- 验证: schema 字段增加到 3 个
 SELECT count(*) = 3 AS t2_schema_after

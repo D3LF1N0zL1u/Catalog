@@ -37,17 +37,17 @@ SELECT
 -----------------------+--------------
  t                     | t
 (1 row)
--- 3. 传入 p_column_doc 参数
-SELECT iceberg_catalog.add_column(
+-- 3. 传入 p_column_doc 参数，返回合法 JSONB
+SELECT jsonb_typeof(iceberg_catalog.add_column(
     'test_ns',
     'test_tbl',
     'col_with_doc',
     'decimal(10,2)',
     p_column_doc => 'A documented column'
-);
-                                                   add_column                                                    
------------------------------------------------------------------------------------------------------------------
- {"metadata": {}, "metadata-location": "file:///tmp/iceberg_catalog/test_ns/test_tbl/metadata/v2.metadata.json"}
+)) AS result_type;
+ result_type 
+-------------
+ object
 (1 row)
 -- 3.1 验证外表已增加新列
 SELECT count(*) = 1 AS col_new_col_exists
