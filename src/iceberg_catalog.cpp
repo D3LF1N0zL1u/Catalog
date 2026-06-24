@@ -17,18 +17,45 @@
 
 PG_MODULE_MAGIC;
 
+/* Internal storage for delta-table hooks registered by another extension. */
+extern "C" {
+iceberg_create_delta_table_hook_type create_delta_table_hook = NULL;
+iceberg_drop_delta_table_hook_type   drop_delta_table_hook   = NULL;
+}
+
+/*
+ * register_iceberg_create_delta_table_hook
+ *
+ * Called by an external extension (e.g., the delta plugin) to register
+ * a callback that will be invoked during iceberg_catalog.create_table().
+ */
+extern "C" void
+register_iceberg_create_delta_table_hook(iceberg_create_delta_table_hook_type callback)
+{
+    create_delta_table_hook = callback;
+}
+
+/*
+ * register_iceberg_drop_delta_table_hook
+ *
+ * Called by an external extension (e.g., the delta plugin) to register
+ * a callback that will be invoked during iceberg_catalog.drop_table().
+ */
+extern "C" void
+register_iceberg_drop_delta_table_hook(iceberg_drop_delta_table_hook_type callback)
+{
+    drop_delta_table_hook = callback;
+}
+
 /*
  * _PG_init
  *
- * Create the rendezvous variables that optional extensions can use to
- * register delta-table creation/drop hooks.  If no extension registers a
- * hook, the pointer remains NULL and iceberg_catalog proceeds normally.
+ * Shared library entry point.  Hook registration is performed by external
+ * extensions calling the PGDLLEXPORT registration functions above.
  */
 extern "C" void
 _PG_init(void)
 {
-    (void) find_rendezvous_variable(ICEBERG_CREATE_DELTA_TABLE_HOOK_VAR);
-    (void) find_rendezvous_variable(ICEBERG_DROP_DELTA_TABLE_HOOK_VAR);
 }
 
 #define REQUIRE_ENV(name) \
